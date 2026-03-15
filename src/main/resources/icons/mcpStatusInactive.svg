@@ -1,0 +1,14 @@
+<svg width="13" height="13" viewBox="0 0 13 13" xmlns="http://www.w3.org/2000/svg">
+    <!-- graph edges -->
+    <line x1="6.5" y1="6.5" x2="3" y2="3" stroke="#999999" stroke-width="1.5"/>
+    <line x1="6.5" y1="6.5" x2="10.5" y2="4" stroke="#999999" stroke-width="1.5"/>
+    <line x1="6.5" y1="6.5" x2="10" y2="10.5" stroke="#999999" stroke-width="1.5"/>
+    <line x1="6.5" y1="6.5" x2="2.5" y2="9" stroke="#999999" stroke-width="1.5"/>
+    <!-- outer nodes -->
+    <circle cx="3" cy="3" r="1.8" fill="#999999"/>
+    <circle cx="10.5" cy="4" r="1.8" fill="#999999"/>
+    <circle cx="10" cy="10.5" r="1.8" fill="#999999"/>
+    <circle cx="2.5" cy="9" r="1.8" fill="#999999"/>
+    <!-- center node -->
+    <circle cx="6.5" cy="6.5" r="1.8" fill="#999999"/>
+</svg>

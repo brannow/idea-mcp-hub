@@ -15,6 +15,7 @@ The Java SDK docs are kept as reference since some patterns may be useful.
 
 - [kotlin-sdk-overview.md](kotlin-sdk-overview.md) — Architecture, server setup, tool/resource/prompt registration, transport types
 - [java-sdk-overview.md](java-sdk-overview.md) — Java alternative: architecture, builder pattern, Spring integration
+- [stdio-proxy-architecture.md](stdio-proxy-architecture.md) — How JetBrains exposes MCP via stdio using a two-process proxy (reverse-engineered from their mcpserver plugin)
 
 ## Full SDK Source
 

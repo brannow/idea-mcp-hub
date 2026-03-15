@@ -3,16 +3,19 @@
     <name>PhpStorm MCP</name>
     <vendor>brannow</vendor>
     <description><![CDATA[
-        Hello World - MCP plugin skeleton for PhpStorm.
+        MCP server plugin for PhpStorm — exposes IDE debugging features to AI agents.
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.xdebugger</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <notificationGroup
             id="PhpStorm MCP"
             displayType="BALLOON"/>
-        <postStartupActivity
-            implementation="com.github.brannow.phpstormmcp.ProjectOpenListener"/>
+        <statusBarWidgetFactory
+            id="McpStatusWidget"
+            implementation="com.github.brannow.phpstormmcp.statusbar.McpStatusWidgetFactory"
+            order="after Encoding"/>
     </extensions>
 </idea-plugin>

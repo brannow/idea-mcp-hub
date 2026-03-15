@@ -23,6 +23,7 @@ gradlew.bat
 
 # Reference repositories (cloned, not ours)
 internal/reference-Repository/
+sandbox/
 
 # Claude private data
 .claude-private/

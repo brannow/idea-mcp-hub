@@ -14,52 +14,54 @@ Build incrementally — each milestone is testable on its own before moving to t
 
 ---
 
-## Milestone 0.5: Status Bar Widget
+## Milestone 0.5: Status Bar Widget ✅
 
 Give the human visibility into the MCP server state — a small indicator in PhpStorm's status bar.
 
-- [ ] Status bar widget with plugin icon (grayed out = inactive, colored = active)
-- [ ] Click to open popup with: connection status, server port/transport info
-- [ ] Activity log: lightweight rolling log of recent MCP events ("Client connected", "breakpoint_add called", etc.)
-- [ ] Server start/stop toggle from the widget
+- [x] Status bar widget with plugin icon (grayed out = inactive, colored = active)
+- [x] Click to open popup with: connection status, server port/transport info
+- [x] Activity log: lightweight rolling log of recent MCP events ("Client connected", "breakpoint_add called", etc.)
+- [x] Server start/stop toggle from the widget
 
 **Test**: Plugin loads → icon appears in status bar (grayed out). Server starts → icon lights up. Click icon → see status popup. Later when tools are implemented, verify tool calls appear in the activity log.
 
 ---
 
-## Milestone 1: MCP Server Infrastructure
+## Milestone 1: MCP Server Infrastructure ✅
 
 Get a working MCP server running inside the plugin that an external client can connect to.
 
-- [ ] Add Kotlin MCP SDK dependency to build.gradle.kts
-- [ ] Create MCP server service (project-level, starts with project)
-- [ ] Choose transport: stdio or HTTP (evaluate what works best inside a plugin)
-- [ ] Register a single dummy tool (`ping` → returns `pong`) to verify the protocol works
-- [ ] Connect from an external MCP client (e.g. Claude, or a simple test client) and call `ping`
+- [x] Add Kotlin MCP SDK dependency to build.gradle.kts
+- [x] Create MCP server service (project-level, starts with project)
+- [x] Transport: Streamable HTTP on localhost (fixed port 6969, fallback to random). See `internal/docs/04-mcp-sdk/stdio-proxy-architecture.md` for stdio proxy analysis.
+- [x] Register a single dummy tool (`ping` → returns `pong`) to verify the protocol works
+- [x] Connect from an external MCP client (MCP Inspector) and call `ping`
+- [x] Client connect/disconnect notifications in activity log and widget
 
-**Test**: MCP client connects → calls `ping` → gets `pong` response.
+**Test**: MCP client connects → calls `ping` → gets `pong` response. ✅ Verified with MCP Inspector.
 
 ---
 
-## Milestone 2: Breakpoint Tools
+## Milestone 2: Breakpoint Tools ✅
 
 First real tools — breakpoints work without an active debug session, so they're the simplest to test.
 
-- [ ] `breakpoint_list` — read all breakpoints from XBreakpointManager
-- [ ] `breakpoint_add` — add a line breakpoint (file + line)
-- [ ] `breakpoint_add` with condition — conditional breakpoints
-- [ ] `breakpoint_update` — enable/disable, change condition
-- [ ] `breakpoint_remove` — remove single or all breakpoints
+- [x] `breakpoint_list` — list all line breakpoints, optional file filter
+- [x] `breakpoint_add` — add a line breakpoint (file + line), with optional condition, log expression, suspend toggle
+- [x] `breakpoint_update` — enable/disable, change condition/log expression/suspend by ID or file:line
+- [x] `breakpoint_remove` — remove by ID(s), file:line(s) (comma-separated), or omit to remove all
+- [x] Flexible file paths: accepts absolute or project-relative paths, returns project-relative
+- [x] Flexible IDs: numeric timestamp ID or `file:line` reference (e.g. `src/index.php:5`)
 
-**Test**: Use MCP client to add a breakpoint → verify it appears in PhpStorm's gutter. List breakpoints → verify output matches the Breakpoints dialog. Remove it → verify it's gone.
+**Test**: Breakpoints added via MCP Inspector appear in PhpStorm gutter. List matches Breakpoints dialog. Remove clears them. ✅ Verified.
 
 ---
 
-## Milestone 3: Session Management
+## Milestone 3: Session Management ✅
 
-- [ ] `session_list` — list active debug sessions with status and active flag
-- [ ] `session_stop` — stop a specific session or all sessions
-- [ ] Active session detection (which session is currently focused in the UI)
+- [x] `session_list` — list active debug sessions with status and active flag
+- [x] `session_stop` — stop a specific session or all sessions
+- [x] Active session detection (which session is currently focused in the UI)
 
 **Test**: Manually start 1-2 debug sessions in PhpStorm. Call `session_list` → verify output matches the debug tabs. Call `session_stop` → verify session ends.
 
