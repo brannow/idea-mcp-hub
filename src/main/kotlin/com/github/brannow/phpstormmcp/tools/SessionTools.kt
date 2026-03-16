@@ -3,11 +3,42 @@ package com.github.brannow.phpstormmcp.tools
 import com.github.brannow.phpstormmcp.statusbar.McpActivityLog
 import com.intellij.openapi.project.Project
 import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.ToolAnnotations
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
+
+internal fun handleSessionList(service: SessionService): CallToolResult {
+    val sessions = service.listSessions()
+    return if (sessions.isEmpty()) {
+        ok("No sessions in project")
+    } else {
+        ok(formatSessionList(sessions))
+    }
+}
+
+internal fun handleSessionStop(service: SessionService, sessionId: String?, all: Boolean): CallToolResult {
+    if (all) {
+        val stopped = service.stopAllSessions()
+        return if (stopped.isEmpty()) {
+            ok("No sessions in project")
+        } else {
+            ok(formatSessionList(stopped))
+        }
+    }
+
+    val info = service.stopSmart(sessionId)
+    val remaining = service.listSessions()
+    return if (remaining.isEmpty()) {
+        ok(formatSession(info))
+    } else {
+        ok("${formatSession(info)}\n\n${remaining.size} session(s) remaining:\n${formatSessionList(remaining)}")
+
+    }
+}
 
 fun Server.registerSessionTools(project: Project) {
     val service = SessionService.getInstance(project)
@@ -16,7 +47,13 @@ fun Server.registerSessionTools(project: Project) {
     // --- session_list ---
     addTool(
         name = "session_list",
-        description = "List active debug sessions with their status (paused/running), current position, and which session is active.",
+        description = "List active debug sessions with their current position and which session is active. Sessions at a breakpoint show their position, running sessions are marked [running].",
+        toolAnnotations = ToolAnnotations(
+            readOnlyHint = true,
+            destructiveHint = false,
+            idempotentHint = false,
+            openWorldHint = false,
+        ),
         inputSchema = ToolSchema(
             properties = buildJsonObject {},
             required = emptyList()
@@ -24,26 +61,27 @@ fun Server.registerSessionTools(project: Project) {
     ) { _ ->
         activityLog.log("session_list")
         try {
-            val sessions = service.listSessions()
-            if (sessions.isEmpty()) {
-                ok("No active debug sessions")
-            } else {
-                ok(formatSessionList(sessions))
-            }
+            handleSessionList(service)
         } catch (e: Exception) {
-            err("Error: ${e.message}")
+            err(e.message ?: "Unknown error")
         }
     }
 
     // --- session_stop ---
     addTool(
         name = "session_stop",
-        description = "Stop debug session(s). With no arguments: stops the only active session, or lists sessions if multiple exist. Use session_id to target a specific session, or all=true to stop everything.",
+        description = "Stop debug session(s). Without session_id: stops the active session (or first on the stack). Use session_id to target a specific session, or all=true to stop everything.",
+        toolAnnotations = ToolAnnotations(
+            readOnlyHint = false,
+            destructiveHint = true,
+            idempotentHint = false,
+            openWorldHint = false,
+        ),
         inputSchema = ToolSchema(
             properties = buildJsonObject {
                 putJsonObject("session_id") {
                     put("type", "string")
-                    put("description", "#ID of the session to stop (from session_list). Omit if only one session is active.")
+                    put("description", "ID of the session to stop (from session_list). Omit to stop the active session.")
                 }
                 putJsonObject("all") {
                     put("type", "boolean")
@@ -58,26 +96,20 @@ fun Server.registerSessionTools(project: Project) {
 
         activityLog.log("session_stop" + when {
             all -> " (all)"
-            sessionId != null -> " (#$sessionId)"
+            sessionId != null -> " ($sessionId)"
             else -> ""
         })
 
         try {
-            if (all) {
-                val stopped = service.stopAllSessions()
-                if (stopped.isEmpty()) {
-                    ok("No active debug sessions")
-                } else {
-                    ok(formatSessionList(stopped))
-                }
+            handleSessionStop(service, sessionId, all)
+        } catch (e: SessionNotFoundException) {
+            if (e.activeSessions.isEmpty()) {
+                err("Session '${e.requestedId}' not found, no sessions in project")
             } else {
-                val info = service.stopSmart(sessionId)
-                ok(formatSession(info))
+                err("Session '${e.requestedId}' not found, current sessions:\n\n${formatSessionList(e.activeSessions)}")
             }
-        } catch (e: AmbiguousSessionException) {
-            err("Multiple active sessions, use #ID to stop a specific one or all=true to stop all:\n\n${formatSessionList(e.sessions)}")
         } catch (e: Exception) {
-            err("Error: ${e.message}")
+            err(e.message ?: "Unknown error")
         }
     }
 }

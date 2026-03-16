@@ -52,7 +52,7 @@ Every tool response follows the same three-part structure. The structure is pred
 | Domain      | Format                                           | Example                                                    |
 |-------------|--------------------------------------------------|------------------------------------------------------------|
 | Breakpoint  | `#ID file:line (annotations)`                    | `#3 src/WorldClass.php:13 (disabled, condition: $foo === '')` |
-| Session     | `#ID "name" [status] at file:line (active)`      | `#12345 "index.php" [paused] at src/index.php:15 (active)` |
+| Session     | `#ID "name" [running]? at file:line (active)`     | `#12345 "index.php" at src/index.php:15 (active)` |
 
 Annotations are parenthetical, comma-separated. Only non-default state is shown (enabled + suspend are defaults, so only `disabled` and `no suspend` appear).
 
@@ -123,9 +123,10 @@ No breakpoints in project found
 
 **Session — same pattern:**
 ```
-#12345 "index.php" [paused] at src/index.php:15 (active)
+#12345 "index.php" at src/index.php:15 (active)
 #12346 "test.php" [running]
 ```
+Status is only shown for non-default state: `[running]` means code is executing between breakpoints (agent can't inspect). No tag = at a breakpoint, ready for interaction.
 
 ---
 
@@ -255,7 +256,7 @@ List active debug sessions.
 **Input**: (none)
 **Output**:
 ```
-#12345 "index.php" [paused] at src/index.php:15 (active)
+#12345 "index.php" at src/index.php:15 (active)
 #12346 "test.php" [running]
 ```
 Or: `No active debug sessions`
@@ -266,11 +267,12 @@ Or: `No active debug sessions`
 Stop debug session(s).
 
 **Input**:
-- `session_id` (optional) — #ID of session. If omitted + only one session → stops it. If omitted + multiple → error listing sessions.
+- `session_id` (optional) — ID of session (with or without `#` prefix). If omitted → stops the active session (or first on the stack).
 - `all` (optional) — true to stop all sessions
 
-**Output**: Stopped session in `#ID "name" [stopped]` notation.
-**Multiple sessions**: Lists them with guidance to use #ID or all=true.
+**Output**: Stopped session in `#ID "name" [stopped]` notation. If other sessions remain, lists them with count.
+**Not found**: Shows the requested ID + list of active sessions (or "no active debug sessions").
+**No sessions**: `No active debug sessions` (error state).
 
 ---
 
@@ -400,17 +402,39 @@ Modify a variable's value at runtime.
 
 ---
 
+## Tool Annotations (MCP Hints)
+
+Every tool declares MCP `ToolAnnotations` to signal its behavior to the client. These are hints, not guarantees.
+
+**Key decisions:**
+
+- **`idempotentHint` is always `false`** — The agent shares IDE state with a human user. Between two identical calls, the user may have changed breakpoints, stepped through code, or stopped sessions. No call is guaranteed to be a no-op on repeat.
+- **`openWorldHint` is always `false`** — All tools interact with PhpStorm's internal state, not external services.
+- **`readOnlyHint`** — `true` only for list/inspection tools that don't modify state.
+- **`destructiveHint`** — `true` for tools that remove or terminate things (breakpoint_remove, session_stop). `false` for tools that add or modify.
+
+| Tool | readOnly | destructive | idempotent | openWorld |
+|---|---|---|---|---|
+| `breakpoint_list` | true | false | false | false |
+| `breakpoint_add` | false | false | false | false |
+| `breakpoint_update` | false | false | false | false |
+| `breakpoint_remove` | false | true | false | false |
+| `session_list` | true | false | false | false |
+| `session_stop` | false | true | false | false |
+
+---
+
 ## Active Session Convention
 
-PhpStorm maintains an **active session** — the one currently selected in the debug tab. All session-scoped tools default to the active session:
+PhpStorm maintains an **active session** — the one currently selected in the debug tab. All session-scoped tools default to the active session (or first on the stack if no active session):
 
-- **0 sessions**: Error "No active debug session"
+- **0 sessions**: Error "No active debug sessions"
 - **1 session**: That session is always active
-- **N sessions**: The one the user has focused (or last interacted with) is active. Agent can switch by passing a different `session_id`.
+- **N sessions**: The active session is used by default. Agent can switch by passing a different `session_id`.
 
 The snapshot always includes which session is active:
 ```
-session: { id: "abc", name: "index.php", status: "paused", active: true }
+session: { id: "abc", name: "index.php", active: true }
 ```
 
 `session_list` marks which session is active. The agent only needs to think about session IDs when it wants to work with a non-active session.

@@ -28,6 +28,7 @@ dependencies {
             providers.gradleProperty("platformType").get(),
             providers.gradleProperty("platformVersion").get()
         )
+        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.JUnit5)
     }
 
     // MCP Kotlin SDK (server)
@@ -41,6 +42,13 @@ dependencies {
 
     // Logging
     implementation("org.slf4j:slf4j-simple:2.0.17")
+
+    // Testing
+    testImplementation("io.mockk:mockk:1.14.2")
+    testImplementation("org.junit.jupiter:junit-jupiter-api:5.11.4")
+    testImplementation("org.junit.jupiter:junit-jupiter-params:5.11.4")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.11.4")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
 }
 
 intellijPlatform {
@@ -57,5 +65,8 @@ intellijPlatform {
 tasks {
     wrapper {
         gradleVersion = "9.0"
+    }
+    test {
+        useJUnitPlatform()
     }
 }

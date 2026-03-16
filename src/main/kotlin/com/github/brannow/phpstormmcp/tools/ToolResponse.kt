@@ -81,7 +81,9 @@ private fun formatAnnotations(bp: BreakpointInfo): String {
 
 fun formatSession(session: SessionInfo): String {
     val parts = mutableListOf<String>()
-    parts.add("#${session.id} \"${session.name}\" [${session.status}]")
+    // Only show status when it's non-default (running). Paused is the expected state.
+    val statusTag = if (session.status == "running") " [running]" else ""
+    parts.add("#${session.id} \"${session.name}\"$statusTag")
 
     if (session.currentFile != null && session.currentLine != null) {
         parts.add("at ${session.currentFile}:${session.currentLine}")

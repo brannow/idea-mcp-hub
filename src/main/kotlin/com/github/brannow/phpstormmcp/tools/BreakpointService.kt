@@ -8,6 +8,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.xdebugger.XDebuggerManager
 import com.intellij.xdebugger.XDebuggerUtil
 import com.intellij.xdebugger.breakpoints.SuspendPolicy
+import com.intellij.xdebugger.breakpoints.XBreakpointManager
 import com.intellij.xdebugger.breakpoints.XLineBreakpoint
 import com.intellij.xdebugger.breakpoints.XLineBreakpointType
 import java.util.concurrent.CompletableFuture
@@ -43,15 +44,30 @@ class BreakpointNotFoundException(
 ) : IllegalArgumentException()
 
 @Service(Service.Level.PROJECT)
-class BreakpointService(private val project: Project) {
+open class BreakpointService(private val project: Project) {
 
-    private fun getBreakpointManager() =
+    internal open fun getBreakpointManager(): XBreakpointManager =
         XDebuggerManager.getInstance(project).breakpointManager
 
-    private fun findLineBreakpointType(): XLineBreakpointType<*>? {
+    internal open fun findLineBreakpointType(): XLineBreakpointType<*>? {
         return XDebuggerUtil.getInstance().lineBreakpointTypes.firstOrNull {
             it.id.contains("php", ignoreCase = true)
         }
+    }
+
+    internal open fun resolveFile(path: String): VirtualFile? {
+        LocalFileSystem.getInstance().findFileByPath(path)?.let { return it }
+        val basePath = project.basePath ?: return null
+        val resolved = "$basePath/$path"
+        return LocalFileSystem.getInstance().findFileByPath(resolved)
+    }
+
+    internal open fun <T> runOnEdt(action: () -> T): T {
+        val future = CompletableFuture<T>()
+        ApplicationManager.getApplication().invokeLater {
+            future.complete(action())
+        }
+        return future.get()
     }
 
     fun listBreakpoints(fileFilter: String? = null): List<BreakpointInfo> {
@@ -81,9 +97,7 @@ class BreakpointService(private val project: Project) {
 
         val existing = findBreakpointsAtLine(virtualFile, zeroBasedLine)
 
-        val future = CompletableFuture<BreakpointInfo>()
-
-        ApplicationManager.getApplication().invokeLater {
+        val info = runOnEdt {
             @Suppress("UNCHECKED_CAST")
             val bp = getBreakpointManager().addLineBreakpoint(
                 type as XLineBreakpointType<Nothing>,
@@ -102,11 +116,11 @@ class BreakpointService(private val project: Project) {
                 bp.suspendPolicy = SuspendPolicy.NONE
             }
 
-            future.complete(toBreakpointInfo(bp)!!)
+            toBreakpointInfo(bp)!!
         }
 
         return AddBreakpointResult(
-            breakpoint = future.get(),
+            breakpoint = info,
             existingBreakpoints = existing
         )
     }
@@ -121,9 +135,7 @@ class BreakpointService(private val project: Project) {
         val bp = findBreakpointById(id)
             ?: throw BreakpointNotFoundException(id)
 
-        val future = CompletableFuture<BreakpointInfo>()
-
-        ApplicationManager.getApplication().invokeLater {
+        return runOnEdt {
             if (enabled != null) {
                 bp.isEnabled = enabled
             }
@@ -137,10 +149,8 @@ class BreakpointService(private val project: Project) {
                 bp.suspendPolicy = if (suspend) SuspendPolicy.ALL else SuspendPolicy.NONE
             }
 
-            future.complete(toBreakpointInfo(bp)!!)
+            toBreakpointInfo(bp)!!
         }
-
-        return future.get()
     }
 
     fun removeBreakpoints(ids: List<String>? = null): RemoveBreakpointsResult {
@@ -153,12 +163,7 @@ class BreakpointService(private val project: Project) {
             val infos = allBps.mapNotNull { toBreakpointInfo(it) }
 
             if (allBps.isNotEmpty()) {
-                val future = CompletableFuture<Unit>()
-                ApplicationManager.getApplication().invokeLater {
-                    allBps.forEach { manager.removeBreakpoint(it) }
-                    future.complete(Unit)
-                }
-                future.get()
+                runOnEdt { allBps.forEach { manager.removeBreakpoint(it) } }
             }
 
             return RemoveBreakpointsResult(removed = infos)
@@ -184,12 +189,7 @@ class BreakpointService(private val project: Project) {
         }
 
         if (toRemove.isNotEmpty()) {
-            val future = CompletableFuture<Unit>()
-            ApplicationManager.getApplication().invokeLater {
-                toRemove.forEach { manager.removeBreakpoint(it) }
-                future.complete(Unit)
-            }
-            future.get()
+            runOnEdt { toRemove.forEach { manager.removeBreakpoint(it) } }
         }
 
         return RemoveBreakpointsResult(removed = toRemoveInfos, notFound = notFound)
@@ -295,14 +295,6 @@ class BreakpointService(private val project: Project) {
     }
 
     fun fileExists(path: String): Boolean = resolveFile(path) != null
-
-    private fun resolveFile(path: String): VirtualFile? {
-        LocalFileSystem.getInstance().findFileByPath(path)?.let { return it }
-
-        val basePath = project.basePath ?: return null
-        val resolved = "$basePath/$path"
-        return LocalFileSystem.getInstance().findFileByPath(resolved)
-    }
 
     private fun toProjectRelativePath(absolutePath: String): String {
         val basePath = project.basePath ?: return absolutePath

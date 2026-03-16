@@ -17,12 +17,21 @@ data class SessionInfo(
 )
 
 @Service(Service.Level.PROJECT)
-class SessionService(private val project: Project) {
+open class SessionService(private val project: Project) {
 
-    private fun getDebuggerManager() = XDebuggerManager.getInstance(project)
+    internal open fun getDebuggerManager(): XDebuggerManager = XDebuggerManager.getInstance(project)
 
-    private fun sessionId(session: XDebugSession): String =
+    internal open fun sessionId(session: XDebugSession): String =
         System.identityHashCode(session).toString()
+
+    internal open fun runOnEdt(action: () -> Unit) {
+        val future = CompletableFuture<Unit>()
+        ApplicationManager.getApplication().invokeLater {
+            action()
+            future.complete(Unit)
+        }
+        future.get()
+    }
 
     private fun sessionStatus(session: XDebugSession): String = when {
         session.isStopped -> "stopped"
@@ -60,19 +69,13 @@ class SessionService(private val project: Project) {
     }
 
     fun stopSession(sessionId: String): SessionInfo {
+        val cleanId = sessionId.trimStart('#').trim()
         val manager = getDebuggerManager()
-        val session = findSessionById(sessionId)
-            ?: throw IllegalArgumentException("Session not found: #$sessionId")
+        val session = findSessionById(cleanId)
+            ?: throw SessionNotFoundException(cleanId, listSessions())
 
         val info = toSessionInfo(session, manager.currentSession)
-        val future = CompletableFuture<Unit>()
-
-        ApplicationManager.getApplication().invokeLater {
-            session.stop()
-            future.complete(Unit)
-        }
-
-        future.get()
+        runOnEdt { session.stop() }
         return info.copy(status = "stopped")
     }
 
@@ -83,14 +86,7 @@ class SessionService(private val project: Project) {
         if (sessions.isEmpty()) return emptyList()
 
         val infos = sessions.map { toSessionInfo(it, currentSession) }
-        val future = CompletableFuture<Unit>()
-
-        ApplicationManager.getApplication().invokeLater {
-            sessions.forEach { it.stop() }
-            future.complete(Unit)
-        }
-
-        future.get()
+        runOnEdt { sessions.forEach { it.stop() } }
         return infos.map { it.copy(status = "stopped") }
     }
 
@@ -99,17 +95,15 @@ class SessionService(private val project: Project) {
             return stopSession(sessionId)
         }
 
-        val sessions = getDebuggerManager().debugSessions.filter { !it.isStopped }
-        return when {
-            sessions.isEmpty() -> throw IllegalStateException("No active debug sessions")
-            sessions.size == 1 -> stopSession(sessionId(sessions.first()))
-            else -> {
-                val manager = getDebuggerManager()
-                val currentSession = manager.currentSession
-                val infos = sessions.map { toSessionInfo(it, currentSession) }
-                throw AmbiguousSessionException(infos)
-            }
+        val manager = getDebuggerManager()
+        val sessions = manager.debugSessions.filter { !it.isStopped }
+        if (sessions.isEmpty()) {
+            throw IllegalStateException("No sessions in project")
         }
+
+        // Prefer active session, fall back to first on the stack
+        val target = manager.currentSession?.takeIf { !it.isStopped } ?: sessions.first()
+        return stopSession(sessionId(target))
     }
 
     private fun findSessionById(id: String): XDebugSession? {
@@ -126,6 +120,7 @@ class SessionService(private val project: Project) {
     }
 }
 
-class AmbiguousSessionException(
-    val sessions: List<SessionInfo>
-) : IllegalArgumentException()
+class SessionNotFoundException(
+    val requestedId: String,
+    val activeSessions: List<SessionInfo>
+) : IllegalArgumentException("Session not found: #$requestedId")
