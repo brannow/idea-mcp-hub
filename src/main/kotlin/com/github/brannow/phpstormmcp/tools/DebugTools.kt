@@ -1,6 +1,7 @@
 package com.github.brannow.phpstormmcp.tools
 
 import com.github.brannow.phpstormmcp.statusbar.McpActivityLog
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.xdebugger.XDebugSession
 import com.intellij.xdebugger.XDebuggerManager
@@ -150,6 +151,98 @@ fun Server.registerDebugTools(project: Project) {
         }
     }
 
+    // --- debug_inspect_frame ---
+    addTool(
+        name = "debug_inspect_frame",
+        description = "Switch inspection to a different stack frame. Like clicking a row in the stacktrace panel. " +
+                "Shows source context and variables at that frame's scope. Requires a paused debug session.",
+        toolAnnotations = readOnlyAnnotations,
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                putJsonObject("frame_index") {
+                    put("type", "integer")
+                    put("description", "Stack frame index: 0 = current (top), 1 = caller, etc. " +
+                            "Use debug_snapshot with include: [\"stacktrace\"] to see available frames.")
+                }
+                putJsonObject("include") {
+                    put("type", "array")
+                    put("description", "Parts to include: \"source\", \"variables\", \"stacktrace\". " +
+                            "Omit for full snapshot. Session info is always included.")
+                    putJsonObject("items") {
+                        put("type", "string")
+                        putJsonArray("enum") {
+                            add("source")
+                            add("variables")
+                            add("stacktrace")
+                        }
+                    }
+                }
+                putJsonObject("globals") {
+                    put("type", "boolean")
+                    put("description", "Include PHP superglobals in variables. Default: false.")
+                }
+                putJsonObject("session_id") {
+                    put("type", "string")
+                    put("description", "ID of the debug session (from session_list). Omit to use the active session.")
+                }
+            },
+            required = listOf("frame_index")
+        )
+    ) { request ->
+        activityLog.log("debug_inspect_frame")
+        try {
+            val frameIndex = request.arguments?.get("frame_index")?.jsonPrimitive?.intOrNull
+                ?: return@addTool err("Missing required parameter: frame_index")
+            if (frameIndex < 0) return@addTool err("frame_index must be >= 0")
+
+            val sessionId = request.arguments?.get("session_id")?.jsonPrimitive?.content
+            val (session, error) = resolvePausedSession(project, sessionId)
+            if (error != null) return@addTool error
+
+            val suspendContext = session!!.suspendContext
+                ?: return@addTool err("No suspend context — session may be between steps")
+
+            val rawFrames = stackFrameService.getRawFrames(suspendContext)
+            if (rawFrames.isEmpty()) return@addTool err("No stack frames available")
+            if (frameIndex >= rawFrames.size) {
+                return@addTool err("frame_index $frameIndex out of range (0..${rawFrames.size - 1})")
+            }
+
+            val targetFrame = rawFrames[frameIndex]
+            val executionStack = suspendContext.activeExecutionStack
+                ?: return@addTool err("No execution stack available")
+
+            // Switch frame in PhpStorm (like clicking the row), then read the snapshot
+            ApplicationManager.getApplication().invokeAndWait {
+                session.setCurrentStackFrame(executionStack, targetFrame, frameIndex == 0)
+            }
+
+            // Now read the state — same path as debug_snapshot
+            val includeParam = request.arguments?.get("include")?.jsonArray
+                ?.map { it.jsonPrimitive.content }
+                ?.toSet()
+                ?.ifEmpty { null }
+            val includeGlobals = request.arguments?.get("globals")?.jsonPrimitive?.booleanOrNull ?: false
+            val includeSource = includeParam == null || "source" in includeParam
+            val includeVars = includeParam == null || "variables" in includeParam
+            val includeStack = includeParam == null || "stacktrace" in includeParam
+
+            val sessionInfo = sessionService.listSessions().firstOrNull {
+                it.id == System.identityHashCode(session).toString()
+            }
+
+            val source = if (includeSource) extractSourceContext(session, sourceService) else null
+            val variables = if (includeVars) {
+                extractVariables(session, variableService)?.let { filterGlobals(it, includeGlobals) }
+            } else null
+            val frames = if (includeStack) extractStackFrames(session, stackFrameService) else null
+
+            ok(formatSnapshot(sessionInfo, source, variables, frames, activeDepth = frameIndex))
+        } catch (e: Exception) {
+            err(e.message ?: "Unknown error")
+        }
+    }
+
     // --- debug_snapshot ---
     addTool(
         name = "debug_snapshot",
@@ -193,6 +286,7 @@ fun Server.registerDebugTools(project: Project) {
             val includeParam = request.arguments?.get("include")?.jsonArray
                 ?.map { it.jsonPrimitive.content }
                 ?.toSet()
+                ?.ifEmpty { null }
             val includeGlobals = request.arguments?.get("globals")?.jsonPrimitive?.booleanOrNull ?: false
             // null = include everything
             val includeSource = includeParam == null || "source" in includeParam

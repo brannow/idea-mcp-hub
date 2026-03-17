@@ -162,7 +162,8 @@ fun formatSnapshot(
     session: SessionInfo?,
     source: SourceContext?,
     variables: List<VariableInfo>?,
-    frames: List<FrameInfo>?
+    frames: List<FrameInfo>?,
+    activeDepth: Int = 0
 ): String {
     val sections = mutableListOf<String>()
 
@@ -183,7 +184,7 @@ fun formatSnapshot(
 
     // Stack trace
     if (frames != null) {
-        sections.add(formatStackTrace(frames))
+        sections.add(formatStackTrace(frames, activeDepth))
     }
 
     return sections.joinToString("\n\n")

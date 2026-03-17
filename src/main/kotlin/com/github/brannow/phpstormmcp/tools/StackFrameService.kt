@@ -79,10 +79,10 @@ class StackFrameService(private val project: Project) {
     }
 
     /**
-     * Extract stack frames from a suspend context.
+     * Collect raw XStackFrame objects from a suspend context.
      * Returns frames top-down: index 0 = current (top) frame, index N = deepest caller.
      */
-    fun getStackFrames(suspendContext: XSuspendContext): List<FrameInfo> {
+    fun getRawFrames(suspendContext: XSuspendContext): List<XStackFrame> {
         val stack = suspendContext.activeExecutionStack ?: return emptyList()
 
         val topFrame = stack.topFrame
@@ -95,9 +95,15 @@ class StackFrameService(private val project: Project) {
         val allFrames = mutableListOf<XStackFrame>()
         if (topFrame != null) allFrames.add(topFrame)
         allFrames.addAll(remainingFrames)
+        return allFrames
+    }
 
+    /**
+     * Convert raw XStackFrame objects to FrameInfo metadata.
+     */
+    fun toFrameInfoList(frames: List<XStackFrame>): List<FrameInfo> {
         return platform.readAction {
-            allFrames.mapIndexed { idx, frame ->
+            frames.mapIndexed { idx, frame ->
                 val pos = frame.sourcePosition
                 FrameInfo(
                     depth = idx,
@@ -108,6 +114,14 @@ class StackFrameService(private val project: Project) {
                 )
             }
         }
+    }
+
+    /**
+     * Extract stack frames from a suspend context.
+     * Returns frames top-down: index 0 = current (top) frame, index N = deepest caller.
+     */
+    fun getStackFrames(suspendContext: XSuspendContext): List<FrameInfo> {
+        return toFrameInfoList(getRawFrames(suspendContext))
     }
 
     /**

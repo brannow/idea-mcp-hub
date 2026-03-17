@@ -1,0 +1,252 @@
+package com.github.brannow.phpstormmcp.tools
+
+import com.github.brannow.phpstormmcp.statusbar.McpActivityLog
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.xdebugger.XDebugSession
+import com.intellij.xdebugger.XDebugSessionListener
+import com.intellij.xdebugger.XDebuggerUtil
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.ToolAnnotations
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import kotlinx.serialization.json.*
+import java.util.concurrent.CompletableFuture
+
+/**
+ * Result of waiting for a debug session after a navigation action.
+ * Either the session paused again, or it stopped (ended).
+ */
+internal sealed class StepResult {
+    data object Paused : StepResult()
+    data object SessionEnded : StepResult()
+}
+
+/**
+ * Register a temporary listener, execute a step action, and wait for
+ * the session to either pause or stop.
+ */
+internal fun stepAndWait(session: XDebugSession, action: () -> Unit): StepResult {
+    val future = CompletableFuture<StepResult>()
+
+    val listener = object : XDebugSessionListener {
+        override fun sessionPaused() {
+            future.complete(StepResult.Paused)
+        }
+
+        override fun sessionStopped() {
+            future.complete(StepResult.SessionEnded)
+        }
+    }
+
+    session.addSessionListener(listener)
+    try {
+        action()
+        return future.get()
+    } finally {
+        session.removeSessionListener(listener)
+    }
+}
+
+private val navigationAnnotations = ToolAnnotations(
+    readOnlyHint = false,
+    destructiveHint = false,
+    idempotentHint = false,
+    openWorldHint = false,
+)
+
+internal fun buildSnapshotFromResult(
+    result: StepResult,
+    session: XDebugSession,
+    sessionService: SessionService,
+    sourceService: SourceContextService,
+    variableService: VariableService,
+    stackFrameService: StackFrameService,
+    includeSource: Boolean,
+    includeVars: Boolean,
+    includeStack: Boolean,
+    includeGlobals: Boolean
+): CallToolResult {
+    return when (result) {
+        is StepResult.SessionEnded -> ok("Session ended")
+        is StepResult.Paused -> {
+            val sessionInfo = sessionService.listSessions().firstOrNull {
+                it.id == System.identityHashCode(session).toString()
+            }
+            val source = if (includeSource) extractSourceContext(session, sourceService) else null
+            val variables = if (includeVars) {
+                extractVariables(session, variableService)?.let { filterGlobals(it, includeGlobals) }
+            } else null
+            val frames = if (includeStack) extractStackFrames(session, stackFrameService) else null
+
+            ok(formatSnapshot(sessionInfo, source, variables, frames))
+        }
+    }
+}
+
+/**
+ * Parse include/globals/session_id from request arguments.
+ */
+private data class SnapshotParams(
+    val includeSource: Boolean,
+    val includeVars: Boolean,
+    val includeStack: Boolean,
+    val includeGlobals: Boolean,
+)
+
+private fun parseSnapshotParams(arguments: JsonObject?): SnapshotParams {
+    val includeParam = arguments?.get("include")?.jsonArray
+        ?.map { it.jsonPrimitive.content }
+        ?.toSet()
+        ?.ifEmpty { null }
+    val includeGlobals = arguments?.get("globals")?.jsonPrimitive?.booleanOrNull ?: false
+    return SnapshotParams(
+        includeSource = includeParam == null || "source" in includeParam,
+        includeVars = includeParam == null || "variables" in includeParam,
+        includeStack = includeParam == null || "stacktrace" in includeParam,
+        includeGlobals = includeGlobals,
+    )
+}
+
+private fun JsonObjectBuilder.putSnapshotParams() {
+    putJsonObject("session_id") {
+        put("type", "string")
+        put("description", "ID of the debug session (from session_list). Omit to use the active session.")
+    }
+    putJsonObject("include") {
+        put("type", "array")
+        put("description", "Parts to include: \"source\", \"variables\", \"stacktrace\". " +
+                "Omit for full snapshot. Session info is always included.")
+        putJsonObject("items") {
+            put("type", "string")
+            putJsonArray("enum") {
+                add("source")
+                add("variables")
+                add("stacktrace")
+            }
+        }
+    }
+    putJsonObject("globals") {
+        put("type", "boolean")
+        put("description", "Include PHP superglobals in variables. Default: false.")
+    }
+}
+
+fun Server.registerNavigationTools(project: Project) {
+    val activityLog = McpActivityLog.getInstance(project)
+    val sourceService = SourceContextService.getInstance(project)
+    val stackFrameService = StackFrameService.getInstance(project)
+    val variableService = VariableService.getInstance(project)
+    val sessionService = SessionService.getInstance(project)
+
+    // --- debug_step ---
+    addTool(
+        name = "debug_step",
+        description = "Control debugger execution. Requires a paused debug session. " +
+                "Actions: over (next line, same scope), into (enter function call), " +
+                "out (run until current function returns), continue (resume until next breakpoint or end). " +
+                "Returns a debug snapshot after the debugger pauses again, or session-ended status.",
+        toolAnnotations = navigationAnnotations,
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                putJsonObject("action") {
+                    put("type", "string")
+                    put("description", "The stepping action to perform.")
+                    putJsonArray("enum") {
+                        add("over")
+                        add("into")
+                        add("out")
+                        add("continue")
+                    }
+                }
+                putSnapshotParams()
+            },
+            required = listOf("action")
+        )
+    ) { request ->
+        val action = request.arguments?.get("action")?.jsonPrimitive?.content
+        activityLog.log("debug_step($action)")
+        try {
+            if (action == null) return@addTool err("Missing required parameter: action")
+
+            val sessionId = request.arguments?.get("session_id")?.jsonPrimitive?.content
+            val (session, error) = resolvePausedSession(project, sessionId)
+            if (error != null) return@addTool error
+
+            val params = parseSnapshotParams(request.arguments)
+
+            val result = when (action) {
+                "over" -> stepAndWait(session!!) { session.stepOver(false) }
+                "into" -> stepAndWait(session!!) { session.stepInto() }
+                "out" -> stepAndWait(session!!) { session.stepOut() }
+                "continue" -> stepAndWait(session!!) { session.resume() }
+                else -> return@addTool err("Unknown action: $action. Use: over, into, out, continue")
+            }
+
+            buildSnapshotFromResult(
+                result, session!!, sessionService, sourceService, variableService, stackFrameService,
+                params.includeSource, params.includeVars, params.includeStack, params.includeGlobals
+            )
+        } catch (e: Exception) {
+            err(e.message ?: "Unknown error")
+        }
+    }
+
+    // --- debug_run_to_line ---
+    addTool(
+        name = "debug_run_to_line",
+        description = "Continue execution until reaching a specific line (temporary breakpoint). " +
+                "Requires a paused debug session. " +
+                "Returns a debug snapshot at the target line, or session-ended if the line is not reached.",
+        toolAnnotations = navigationAnnotations,
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                putJsonObject("location") {
+                    put("type", "string")
+                    put("description", "Target file:line. Example: src/index.php:15")
+                }
+                putSnapshotParams()
+            },
+            required = listOf("location")
+        )
+    ) { request ->
+        activityLog.log("debug_run_to_line")
+        try {
+            val location = request.arguments?.get("location")?.jsonPrimitive?.content
+                ?: return@addTool err("Missing required parameter: location")
+
+            val sessionId = request.arguments?.get("session_id")?.jsonPrimitive?.content
+            val (session, error) = resolvePausedSession(project, sessionId)
+            if (error != null) return@addTool error
+
+            val parts = location.split(":")
+            if (parts.size < 2) return@addTool err("Invalid location format. Expected file:line (e.g. src/index.php:15)")
+
+            val filePath = parts.dropLast(1).joinToString(":")
+            val line = parts.last().toIntOrNull()
+                ?: return@addTool err("Invalid line number in location: ${parts.last()}")
+            if (line < 1) return@addTool err("Line must be >= 1")
+
+            val file = LocalFileSystem.getInstance().findFileByPath(filePath)
+                ?: run {
+                    val basePath = project.basePath ?: return@addTool err("File not found: $filePath")
+                    LocalFileSystem.getInstance().findFileByPath("$basePath/$filePath")
+                }
+                ?: return@addTool err("File not found: $filePath")
+
+            val position = XDebuggerUtil.getInstance().createPosition(file, line - 1)
+                ?: return@addTool err("Could not create source position for $location")
+
+            val params = parseSnapshotParams(request.arguments)
+
+            val result = stepAndWait(session!!) { session.runToPosition(position, false) }
+
+            buildSnapshotFromResult(
+                result, session, sessionService, sourceService, variableService, stackFrameService,
+                params.includeSource, params.includeVars, params.includeStack, params.includeGlobals
+            )
+        } catch (e: Exception) {
+            err(e.message ?: "Unknown error")
+        }
+    }
+}

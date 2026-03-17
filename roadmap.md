@@ -175,19 +175,23 @@ Compose the pieces from 4a-4c into the `debug_snapshot` tool.
 
 ---
 
-## Milestone 5: Navigation / Stepping
+## Milestone 5: Navigation / Stepping ✅
 
-Each tool triggers an action and returns a snapshot when the debugger pauses again.
+Consolidated into two tools instead of five — `debug_step` for all stepping actions, `debug_run_to_line` for targeted execution.
 
-- [ ] Async wait pattern: trigger action → listen for pause event → return snapshot
-- [ ] `debug_step_over` — step over + return snapshot
-- [ ] `debug_step_into` — step into + return snapshot
-- [ ] `debug_step_out` — step out + return snapshot
-- [ ] `debug_continue` — resume + return snapshot (or session-ended)
-- [ ] `debug_run_to_line` — run to specific line + return snapshot
-- [ ] Timeout handling: what if `debug_continue` never hits a breakpoint?
+- [x] Sync wait pattern: register `XDebugSessionListener` → trigger action → `CompletableFuture.get()` until `sessionPaused()` or `sessionStopped()`
+- [x] `debug_step(action: "over")` — step over + return snapshot
+- [x] `debug_step(action: "into")` — step into + return snapshot
+- [x] `debug_step(action: "out")` — step out + return snapshot
+- [x] `debug_step(action: "continue")` — resume + return snapshot (or session-ended)
+- [x] `debug_run_to_line(location: "file:line")` — run to specific line via `XSourcePosition` + return snapshot
+- [x] File resolution: absolute or project-relative paths, line validation
+- [x] Empty `include: []` treated as "include everything" (fixed in both `debug_step` and `debug_snapshot`)
+- [x] Shared helpers: `stepAndWait()`, `buildSnapshotFromResult()`, `parseSnapshotParams()`, `putSnapshotParams()`
 
-**Test**: Pause at a breakpoint. Call `debug_step_over` → verify response shows the next line. Call `debug_step_into` on a function call → verify you're inside the function. Call `debug_continue` → verify you hit the next breakpoint or session ends.
+**Design decision**: Combined over/into/out/continue into one `debug_step` tool with an `action` enum — they're identical except for the session method call. `run_to_line` kept separate because it has a fundamentally different input (location parameter). Timeout handling intentionally skipped — blocking call works, and long-running execution is not our problem.
+
+**Test**: Pause at a breakpoint. `debug_step(action: "over")` → next line snapshot. `debug_step(action: "into")` → inside function. `debug_step(action: "out")` → back to caller. `debug_step(action: "continue")` → next breakpoint or session ended. `debug_run_to_line(location: "src/index.php:15")` → snapshot at target line. ✅ Verified.
 
 ---
 
@@ -223,7 +227,7 @@ Pulled forward from Milestone 6 — deep variable inspection before navigation t
 
 ## Milestone 6: Deep Inspection
 
-- [ ] `debug_inspect_frame` — switch to a different stack frame, return snapshot at that scope
+- [x] `debug_inspect_frame` — switch to a different stack frame (via `setCurrentStackFrame`), return snapshot at that scope. Reuses `debug_snapshot` code path — no duplication.
 - [ ] `debug_evaluate` — evaluate PHP expression in current context
 - [ ] `debug_set_value` — modify a variable at runtime
 
