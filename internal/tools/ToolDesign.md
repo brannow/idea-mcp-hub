@@ -61,7 +61,9 @@ The agent doesn't need to know a breakpoint is disabled or conditional when it's
 | Domain      | Format                                           | Example                                                    |
 |-------------|--------------------------------------------------|------------------------------------------------------------|
 | Breakpoint  | `#ID file:line (annotations)`                    | `#3 src/WorldClass.php:13 (disabled, condition: $foo === '')` |
-| Session     | `#ID "name" [running]? at file:line (active)`     | `#12345 "index.php" at src/index.php:15 (active)` |
+| Session     | `#ID "name" [status]? at file:line (active)`       | `#12345 "index.php" at src/index.php:15 (active)` |
+| Variable    | `$name = {type} value` or `$name = {ClassName}`  | `$count = {int} 42`, `$request = {ServerRequest}` |
+| Var detail  | indented tree with `(circular reference)` marker | see `debug_variable_detail` section below |
 
 Annotations are parenthetical, comma-separated. Only non-default state is shown (enabled + suspend are defaults, so only `disabled` and `no suspend` appear).
 
@@ -97,10 +99,11 @@ src/WorldClass.php:13 (multi-breakpoint-line)
 ```
 #6 src/WorldClass.php:13
 
-src/WorldClass.php:13 also has other breakpoints (multi-breakpoint-line):
+src/WorldClass.php:13 (multi-breakpoint-line)
  - #3 (condition: $foo === '')
  - #4
  - #5 (disabled)
+ - #6 (new)
 ```
 
 **Success — remove with remaining (compact index for remaining):**
@@ -149,7 +152,7 @@ No changes specified. Use enabled, condition, log_expression, or suspend to upda
 #12345 "index.php" at src/index.php:15 (active)
 #12346 "test.php" [running]
 ```
-Status is only shown for non-default state: `[running]` means code is executing between breakpoints (agent can't inspect). No tag = at a breakpoint, ready for interaction.
+Status is only shown for non-default state: `[running]` means code is executing between breakpoints (agent can't inspect), `[stopped]` means the session has been terminated. No tag = paused at a breakpoint, ready for interaction.
 
 ---
 
@@ -159,22 +162,39 @@ The snapshot is not a tool itself — it's the **standard response format** retu
 
 ```
 Debug Snapshot:
-├── session:      { id, name, status, active }
-├── position:     { file, line, method, class, namespace }
-├── source:       scope-aware code context (the containing method,
-│                 or ~10 lines above/below if method is large)
-│                 with current line marked
+├── session:      #ID "name" [status] at file:line (active)
+├── source:       FQDN\Class::method() — file:line
+│                 ±5 lines around current position, current line marked with →
+│                 (orientation, not a code viewer — agent can read full files)
 ├── variables:    top-level variables with type + value preview
 │                 (scalars show value, objects show class name,
 │                  arrays show count)
-└── stacktrace:   [ { depth, file, line, method, class }, ... ]
+└── stacktrace:   #depth name at file:line (per frame, shallowest first)
 ```
 
 All snapshot-returning tools accept optional `include` parameter to request
 only specific parts (e.g., `include: ["source", "variables"]`).
 Session + position are always included (minimal overhead, always needed).
 
-**Scope-aware source context**: Instead of blindly showing N lines, detect the containing method/function. If it's ≤ 30 lines, show the whole method. If larger, show ~10 lines above and below the current line. Always include method signature for context.
+**Source context (±5 lines)**: Shows ±5 lines around the current position (respecting file boundaries), with the current line marked by `→`. Header includes FQDN class name and method/function name extracted via PHP PSI. This is orientation — the agent already has file-reading tools for full content. Simpler and more predictable than scope-aware method extraction.
+
+Example source context output:
+```
+\App\Service\UserService::login() — src/Service/UserService.php:8
+
+  3
+  4 class UserService {
+  5     public function login() {
+  6         $user = getUser();
+  7         if ($user === null) {
+→ 8             return false;
+  9         }
+ 10         return true;
+ 11     }
+ 12 }
+```
+
+**Stack trace format**: `#depth name at file:line` per frame, shallowest first. Frame names extracted via `customizePresentation()` (not `equalityObject`, which returns null for PHP/Xdebug).
 
 **Variable previews**: Keep it scannable. `$count = 42`, `$request = {ServerRequest}`, `$items = array(15)`, `$name = "hello world"`. The agent can use `variable_detail` to dig deeper.
 
@@ -228,14 +248,15 @@ Add a line breakpoint.
 - Line must not exceed the file's actual line count (prevents ghost breakpoints that never fire)
 - File must exist in the project
 
-**Output**: The created breakpoint. If the line already has breakpoints, lists them with `(multi-breakpoint-line)` hint:
+**Output**: The created breakpoint. If the line already has breakpoints, shows all breakpoints on that line with `(new)` marking the one just added:
 ```
 #6 src/WorldClass.php:13
 
-src/WorldClass.php:13 also has other breakpoints (multi-breakpoint-line):
+src/WorldClass.php:13 (multi-breakpoint-line)
  - #3 (condition: $foo === '')
  - #4
  - #5 (disabled)
+ - #6 (new)
 ```
 
 ---
@@ -382,21 +403,44 @@ Switch inspection to a different stack frame. Like clicking a row in the stacktr
 ---
 
 #### `debug_variable_detail`
-Expand a variable to see its children/properties. For drilling into nested objects and arrays.
+Expand variables to see their properties/children. For drilling into nested objects and arrays.
 
 **Input**:
-- `path` (required) — variable path, e.g. `$request`, `$request.headers`, `$request.attributes.0`
-- `depth` (optional, default 1) — how many levels of children to return
+- `path` (optional) — variable path(s) using dot notation, comma-separated for multiple. Omit to expand all top-level variables. Examples: `$engine`, `$engine.pattern`, `$engine, $result`
+- `depth` (optional, default 1) — how many levels of children to expand. Use 0 for flat list (same as `debug_variables`).
+- `globals` (optional, default false) — include PHP superglobals. Only applies when no path specified.
 - optional `session_id`
 
-**Output**: Variable tree from the specified path:
+**Path resolution**:
+- Strips `$` prefix and splits on `.`: `$engine.ast.children.0` → segments `["engine", "ast", "children", "0"]`
+- Flexible matching: `parent` matches both `parent` and `*TypedPatternEngine\Nodes\AstNode*parent` (Xdebug's inherited property naming convention `*ClassName*propertyName`)
+- If a short name matches multiple inherited properties (e.g., `*AstNode*parent` and `*NestedNode*parent`), returns an ambiguity error listing the options — agent can use the full `*ClassName*prop` form to disambiguate
+- The agent can always use the exact Xdebug property name as shown in output
+
+**Circular reference detection**:
+- PHP objects commonly have bidirectional references (e.g., `child.parent → parentNode → children → child.parent → ...`)
+- During automatic depth expansion, object types (FQCNs) are tracked along the ancestor chain
+- When a child's type matches an ancestor's type, expansion stops with `(circular reference)` marker
+- Arrays are excluded from tracking (they legitimately nest)
+- **Explicit path navigation bypasses cycle detection** — `$engine.ast.children.0.parent.children.0.text` works even though it traverses a circular reference, because path walking resolves segments directly without ancestor tracking. Only the final `expandValue()` call starts fresh.
+- Trade-off: false positives for legitimately nested same-type objects (rare). The agent can drill past with explicit paths.
+
+**Output**: Variable tree with indentation:
 ```
-$request.headers = {array(19)}
-  ├── host = "example.com"
-  ├── accept = "text/html"
-  ├── cookie = "session=abc..."
-  └── ... (16 more)
+$engine = {CompiledPattern}
+  pattern = {string} "PAGE{id:int}"
+  regex = {string} "/^PAGE(?P<g1>\d+)$/"
+  ast = {SequenceNode}
+    *TypedPatternEngine\Nodes\AstNode*parent = null
+    children = {array[2]}
+      0 = {LiteralNode}
+        text = {string} "PAGE"
+        *TypedPatternEngine\Nodes\AstNode*parent = {SequenceNode} (circular reference)
+      1 = {GroupNode}
+        *TypedPatternEngine\Nodes\AstNode*parent = {SequenceNode} (circular reference)
 ```
+
+**Design note — variable_detail vs evaluate**: `variable_detail` is a read-only tree walk — it expands nodes the debugger already has. Safe, no side effects. For evaluating expressions like `$request->headers->get('Content-Type')`, use `debug_evaluate` instead — it executes PHP code via Xdebug in the current context (can have side effects). The distinction matters: an agent should prefer `variable_detail` for inspecting state (cheap, safe) and only use `evaluate` when it needs to run code (method calls, computed values). PHP developers think in arrow chains (`$request->headers->get()`), so agents will naturally gravitate toward `evaluate` — but for simple property/array access, `variable_detail` with dot-path notation (`$request.headers.0`) is the better choice.
 
 ---
 
@@ -454,6 +498,8 @@ Every tool declares MCP `ToolAnnotations` to signal its behavior to the client. 
 | `breakpoint_remove` | false | true | false | false |
 | `session_list` | true | false | false | false |
 | `session_stop` | false | true | false | false |
+| `debug_variable_detail` | true | false | false | false |
+| `debug_snapshot` | true | false | false | false |
 
 ---
 
@@ -503,3 +549,8 @@ This matters for token efficiency — if the agent is stepping through 10 lines,
 - Variable preview generation should be smart: truncate long strings, limit array previews, show class names for objects.
 - **Library detection** uses `ProjectFileIndex.isInLibrary()` — the platform API that respects the project's actual library root configuration, not string matching on path names like `vendor/`.
 - **Line validation** on `breakpoint_add` uses `FileDocumentManager` to get the actual line count and reject out-of-bounds lines. PhpStorm's internal `XBreakpointManager.addLineBreakpoint()` doesn't validate this (we bypass the GUI guards), so the tool must do it.
+- **ReadAction threading**: All IntelliJ model reads (Document, PSI, XBreakpointManager, XDebuggerManager) must be wrapped in `ReadAction.compute()`. Every service routes this through a `Platform.readAction()` method — real implementations call `ReadAction.compute()`, test mocks pass through directly. Without this, random threading violations crash the MCP request handler.
+- **PHP PSI dependency**: Source context uses `com.jetbrains.php.lang.psi.elements.Method`, `Function`, `PhpClass` for class/method name extraction. Requires `bundledPlugin("com.jetbrains.php")` in build.gradle.kts and `<depends>com.jetbrains.php</depends>` in plugin.xml.
+- **Xdebug inherited property naming**: Xdebug exposes inherited private/protected properties with the `*FullyQualified\ClassName*propertyName` convention. Path resolution matches short names against these (e.g., `parent` matches `*TypedPatternEngine\Nodes\AstNode*parent`). When ambiguous (multiple classes define the same property name), the agent must use the full `*ClassName*prop` form.
+- **Circular reference detection**: `XValue` has no accessible object identity (no Xdebug handle/address through the public API), and each `computeChildren()` call creates fresh `XValue` wrappers, so Java object identity doesn't work. Instead, object types (FQCNs) are tracked along the expansion ancestor chain. Arrays are excluded (type `"array"` nests legitimately). This is a heuristic — false positives exist for legitimately nested same-type objects, but are rare in practice. Explicit path navigation always bypasses cycle detection since `getVariableDetail` resolves the path first, then calls `expandValue` with a fresh ancestor set.
+- **PHP superglobals**: `$_ENV`, `$_SERVER`, `$_GET`, `$_POST`, `$_SESSION`, `$_COOKIE`, `$_FILES`, `$_REQUEST`, `$GLOBALS` are filtered by default in variable output. They're noisy (dozens of entries) and rarely relevant during debugging. Opt-in via `globals: true`.

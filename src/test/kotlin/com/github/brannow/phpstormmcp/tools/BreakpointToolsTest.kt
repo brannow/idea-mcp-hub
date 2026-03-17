@@ -106,6 +106,7 @@ class BreakpointToolsTest {
             }
             override fun getLineCount(file: VirtualFile): Int = FILE_LINE_COUNT
             override fun isLibrary(file: VirtualFile): Boolean = file.path.contains("/vendor/")
+            override fun <T> readAction(action: () -> T): T = action()
             override fun <T> runOnEdt(action: () -> T): T = action()
         }
         return service
@@ -170,6 +171,7 @@ class BreakpointToolsTest {
         val breakpoints: List<BpState>,
         val knownFiles: Set<String>? = null,
         val fileFilter: String? = null,
+        val activeLocation: Pair<String, Int>? = null,
         val expectedOutput: String,
         val isError: Boolean = false,
     ) {
@@ -181,7 +183,7 @@ class BreakpointToolsTest {
     fun breakpoint_list(case: ListCase) {
         val files = case.knownFiles ?: case.breakpoints.map { it.file }.toSet()
         val service = buildService(case.breakpoints, files)
-        val result = handleBreakpointList(service, case.fileFilter)
+        val result = handleBreakpointList(service, case.fileFilter, case.activeLocation)
         assertEquals(case.expectedOutput, resultText(result))
         assertEquals(case.isError, isError(result))
     }
@@ -424,6 +426,35 @@ class BreakpointToolsTest {
                 fileFilter = "src/",
                 expectedOutput = "#100 src/index.php:5\n#102 src/WorldClass.php:13",
             ),
+
+            // --- Active breakpoint ---
+            ListCase(
+                name = "active breakpoint — single on line",
+                breakpoints = listOf(BP_INDEX_5, BP_WORLD_13),
+                activeLocation = "src/index.php" to 5,
+                expectedOutput = "#100 src/index.php:5 (active)\n#102 src/WorldClass.php:13",
+            ),
+            ListCase(
+                name = "active — multi-breakpoint, all suspending → active on header only",
+                breakpoints = listOf(BP_INDEX_5, BP_WORLD_13, BP_WORLD_13_COND),
+                activeLocation = "src/WorldClass.php" to 13,
+                expectedOutput = "#100 src/index.php:5\n" +
+                    "src/WorldClass.php:13 (active, multi-breakpoint-line)\n" +
+                    " - #102\n" +
+                    " - #103 (condition: \$foo === '')",
+            ),
+            ListCase(
+                name = "no active session — no annotation",
+                breakpoints = listOf(BP_INDEX_5),
+                activeLocation = null,
+                expectedOutput = "#100 src/index.php:5",
+            ),
+            ListCase(
+                name = "active location doesn't match any breakpoint",
+                breakpoints = listOf(BP_INDEX_5, BP_WORLD_13),
+                activeLocation = "src/other.php" to 42,
+                expectedOutput = "#100 src/index.php:5\n#102 src/WorldClass.php:13",
+            ),
         )
 
         // ================================================================
@@ -512,9 +543,10 @@ class BreakpointToolsTest {
                 breakpoints = listOf(BP_WORLD_13, BP_WORLD_13_COND),
                 location = "src/WorldClass.php:13",
                 expectedPattern = "#{ID} src/WorldClass.php:13\n\n" +
-                    "src/WorldClass.php:13 also has other breakpoints (multi-breakpoint-line):\n" +
+                    "src/WorldClass.php:13 (multi-breakpoint-line)\n" +
                     " - #102\n" +
-                    " - #103 (condition: \$foo === '')",
+                    " - #103 (condition: \$foo === '')\n" +
+                    " - #{ID} (new)",
             ),
             AddCase(
                 name = "add with condition",

@@ -1,6 +1,7 @@
 package com.github.brannow.phpstormmcp.tools
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import com.intellij.xdebugger.XDebugSession
@@ -22,6 +23,7 @@ class SessionService(private val project: Project) {
     internal interface Platform {
         fun getDebuggerManager(): XDebuggerManager
         fun sessionId(session: XDebugSession): String
+        fun <T> readAction(action: () -> T): T
         fun runOnEdt(action: () -> Unit)
     }
 
@@ -30,6 +32,10 @@ class SessionService(private val project: Project) {
 
         override fun sessionId(session: XDebugSession): String =
             System.identityHashCode(session).toString()
+
+        override fun <T> readAction(action: () -> T): T {
+            return ReadAction.compute<T, Throwable> { action() }
+        }
 
         override fun runOnEdt(action: () -> Unit) {
             val future = CompletableFuture<Unit>()
@@ -68,34 +74,37 @@ class SessionService(private val project: Project) {
         )
     }
 
-    fun listSessions(): List<SessionInfo> {
+    fun listSessions(): List<SessionInfo> = platform.readAction {
         val manager = platform.getDebuggerManager()
         val currentSession = manager.currentSession
-        return manager.debugSessions
+        manager.debugSessions
             .filter { !it.isStopped }
             .map { toSessionInfo(it, currentSession) }
     }
 
     fun stopSession(sessionId: String): SessionInfo {
         val cleanId = sessionId.trimStart('#').trim()
-        val manager = platform.getDebuggerManager()
-        val session = findSessionById(cleanId)
-            ?: throw SessionNotFoundException(cleanId, listSessions())
-
-        val info = toSessionInfo(session, manager.currentSession)
+        val (session, info) = platform.readAction {
+            val manager = platform.getDebuggerManager()
+            val session = findSessionById(cleanId)
+                ?: throw SessionNotFoundException(cleanId, listSessions())
+            session to toSessionInfo(session, manager.currentSession)
+        }
         platform.runOnEdt { session.stop() }
-        return info.copy(status = "stopped")
+        return info.copy(status = "stopped", active = false)
     }
 
     fun stopAllSessions(): List<SessionInfo> {
-        val manager = platform.getDebuggerManager()
-        val currentSession = manager.currentSession
-        val sessions = manager.debugSessions.filter { !it.isStopped }
+        val (sessions, infos) = platform.readAction {
+            val manager = platform.getDebuggerManager()
+            val currentSession = manager.currentSession
+            val sessions = manager.debugSessions.filter { !it.isStopped }
+            sessions to sessions.map { toSessionInfo(it, currentSession) }
+        }
         if (sessions.isEmpty()) return emptyList()
 
-        val infos = sessions.map { toSessionInfo(it, currentSession) }
         platform.runOnEdt { sessions.forEach { it.stop() } }
-        return infos.map { it.copy(status = "stopped") }
+        return infos.map { it.copy(status = "stopped", active = false) }
     }
 
     fun stopSmart(sessionId: String?): SessionInfo {
@@ -103,15 +112,18 @@ class SessionService(private val project: Project) {
             return stopSession(sessionId)
         }
 
-        val manager = platform.getDebuggerManager()
-        val sessions = manager.debugSessions.filter { !it.isStopped }
-        if (sessions.isEmpty()) {
-            throw IllegalStateException("No sessions in project")
-        }
+        val targetId = platform.readAction {
+            val manager = platform.getDebuggerManager()
+            val sessions = manager.debugSessions.filter { !it.isStopped }
+            if (sessions.isEmpty()) {
+                throw IllegalStateException("No sessions in project")
+            }
 
-        // Prefer active session, fall back to first on the stack
-        val target = manager.currentSession?.takeIf { !it.isStopped } ?: sessions.first()
-        return stopSession(platform.sessionId(target))
+            // Prefer active session, fall back to first on the stack
+            val target = manager.currentSession?.takeIf { !it.isStopped } ?: sessions.first()
+            platform.sessionId(target)
+        }
+        return stopSession(targetId)
     }
 
     private fun findSessionById(id: String): XDebugSession? {

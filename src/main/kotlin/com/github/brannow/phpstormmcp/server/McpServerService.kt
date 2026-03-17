@@ -2,6 +2,7 @@ package com.github.brannow.phpstormmcp.server
 
 import com.github.brannow.phpstormmcp.statusbar.McpServerState
 import com.github.brannow.phpstormmcp.tools.registerBreakpointTools
+import com.github.brannow.phpstormmcp.tools.registerDebugTools
 import com.github.brannow.phpstormmcp.tools.registerSessionTools
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
@@ -171,6 +172,7 @@ class McpServerService(private val project: Project) : Disposable {
         ).apply {
             registerBreakpointTools(project)
             registerSessionTools(project)
+            registerDebugTools(project)
         }
     }
 

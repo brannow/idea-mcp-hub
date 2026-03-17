@@ -91,67 +91,87 @@ Natural language output system, testability refactoring, and platform compliance
 
 ---
 
-## Milestone 4a: Source Context
+## Milestone 4a: Source Context ✅
 
-When paused at a breakpoint, show the agent where it is and the surrounding code. This is the read-the-file part of the snapshot.
+Orientation for the agent — show where it is and the surrounding code. Not a code viewer (the agent can already read full files).
 
-- [ ] Get current position from paused session (`XDebugSession.currentPosition`)
-- [ ] Read source file content around current line
-- [ ] Scope-aware extraction: detect containing method/function boundaries
-  - Method ≤ 30 lines → show the whole method
-  - Method > 30 lines → show ±10 lines around current position
-  - Always include method signature for context
-- [ ] Mark the current line in output (e.g. `→` prefix or similar)
-- [ ] Handle edge cases: top-level code (no method), file not found, binary files
+- [x] Get current position from paused session (`XDebugSession.currentPosition`)
+- [x] Read source file content around current line (±5 lines, respecting file boundaries)
+- [x] PHP PSI integration: extract FQDN class name and method/function name via `PsiTreeUtil`
+- [x] Header format: `\App\Service\UserService::login() — src/Service/UserService.php:8`
+- [x] Current line marked with `→` prefix, line numbers with dynamic gutter width
+- [x] Handle edge cases: top-level code (no method/class), document not available, empty files
+- [x] `SourceContextService` with Platform interface for testability
+- [x] Pure companion functions `computeRange()` and `formatSource()` for unit testing
+- [x] All document/PSI access wrapped in `ReadAction` via Platform interface
+- [x] Added `bundledPlugin("com.jetbrains.php")` and `<depends>com.jetbrains.php</depends>`
+- [x] Unit tests: parameterized suite — computeRange (8 cases), formatSource (5 cases), getSourceContext (5 cases), formatSourceContext (3 cases)
 
-**Test**: Manually pause at a breakpoint inside a method. Verify the source context shows the method with the current line marked. Pause at top-level code → verify reasonable context is shown.
+**Design decision**: ±5 lines instead of scope-aware method extraction. The agent can already read full files — source context is for quick orientation, not browsing. Simpler, more predictable, and cheaper in tokens.
+
+**Test**: Pause at breakpoint inside a method → shows `\App\Service\UserService::login() — src/Service/UserService.php:8` with ±5 lines. Top-level code → shows file:line without class/method. ✅ Verified.
 
 ---
 
-## Milestone 4b: Stack Frames
+## Milestone 4b: Stack Frames ✅
 
 Walk the call stack from `XSuspendContext` and present it as readable output.
 
-- [ ] Extract execution stack from `XSuspendContext` → `XExecutionStack`
-- [ ] Iterate `XStackFrame[]` with async `computeStackFrames()` callback
-- [ ] For each frame: extract file, line, function/method name, class
-- [ ] Format as readable stacktrace (deepest first or shallowest first — decide based on what's most useful)
-- [ ] Handle edge cases: native frames, eval'd code, very deep stacks (truncation?)
+- [x] Extract execution stack from `XSuspendContext` → `XExecutionStack`
+- [x] Async `computeStackFrames()` callback bridged to synchronous via `CompletableFuture` (5s timeout)
+- [x] Frame name extraction via `customizePresentation()` with `TextCollector` (minimal `ColoredTextContainer` impl)
+- [x] Parses PHP/Xdebug presentation format (`"file.php:line, ClassName->method()"`) to extract name after comma
+- [x] Format: `#depth name at file:line` — shallowest first (matches PhpStorm's Frames panel)
+- [x] File paths are project-relative
+- [x] Handle edge cases: no suspend context, empty stack, frames without source position, missing names
+- [x] `StackFrameService` with Platform interface for testability
+- [x] All frame access wrapped in `ReadAction` via Platform interface
+- [x] Unit tests: parameterized suite — getStackFrames (6 cases), formatStackTrace (5 cases)
 
-**Test**: Pause at a breakpoint 3+ calls deep. Verify the stack matches PhpStorm's Frames panel. Check that file paths are project-relative.
+**Design decision**: `equalityObject` returns null for PHP/Xdebug, so frame names come from `customizePresentation()` instead. The PHP presentation format includes file info before the comma — we parse and strip that to get just the method/class name.
+
+**Test**: Pause at breakpoint 3+ calls deep → stack matches PhpStorm's Frames panel. File paths are project-relative. ✅ Verified.
 
 ---
 
-## Milestone 4c: Variables
+## Milestone 4c: Variables ✅
 
 The hardest part — `XStackFrame.computeChildren()` is async/callback-based, values are lazy-loaded.
 
-- [ ] Extract top-level variables from current `XStackFrame`
-- [ ] Handle async `computeChildren()` callback pattern
-- [ ] Variable preview generation:
+- [x] Extract top-level variables from current `XStackFrame`
+- [x] Handle async `computeChildren()` callback pattern (EDT + CompletableFuture, same as StackFrameService)
+- [x] Handle both `setPresentation()` overloads: plain type/value strings AND `XValuePresentation` (via `ValueTextCollector` implementing `XValueTextRenderer`)
+- [x] Variable preview generation:
   - Scalars → value (`$count = 42`, `$name = "hello"`)
-  - Objects → class name (`$request = {ServerRequest}`)
+  - Objects → class name (`$request = {ServerRequest}`) — fallback to `{type}` when value is empty
   - Arrays → count (`$items = array(15)`)
   - Null → `$foo = null`
-  - Truncate long strings, limit preview depth
-- [ ] Handle superglobals, special PHP variables
-- [ ] Foundation for later `debug_variable_detail` (expanding nested values)
+- [x] PHP superglobals filtered by default (`$_ENV`, `$_SERVER`, `$_GET`, `$_POST`, `$_SESSION`, `$_COOKIE`, `$_FILES`, `$_REQUEST`, `$GLOBALS`), opt-in via `globals: true`
+- [x] `VariableService` with Platform interface for testability
+- [x] Unit tests: getVariables (3 cases), filterGlobals (3 cases), formatVariables (2 cases), formatVariable (8 cases)
+- [x] Foundation for `debug_variable_detail` and `debug_snapshot` variable output
 
-**Test**: Pause at a breakpoint with mixed variable types. Verify previews match PhpStorm's Variables panel. Check that objects show class names, arrays show counts, strings are truncated sensibly.
+**Test**: Pause at breakpoint → `debug_snapshot(include: ["variables"])` output matches PhpStorm's Variables panel. Objects show `{ClassName}`, scalars show values, superglobals hidden by default. ✅ Verified.
 
 ---
 
-## Milestone 4d: Debug Snapshot Tool
+## Milestone 4d: Debug Snapshot Tool ✅
 
 Compose the pieces from 4a-4c into the `debug_snapshot` tool.
 
-- [ ] `debug_snapshot` tool — returns full snapshot of current paused state
-- [ ] Snapshot data model composing: session info + source context + stack frames + variables
-- [ ] `include` parameter — filter snapshot to only requested parts (e.g. `["source", "variables"]`)
-- [ ] Session + position always included regardless of `include` (minimal overhead, always needed)
-- [ ] Handle "not paused" state gracefully (session running, no session, session stopped)
+- [x] `debug_snapshot` tool — returns full snapshot of current paused state
+- [x] Snapshot composing: session info + source context + variables + stack trace
+- [x] `include` parameter — filter snapshot to only requested parts (e.g. `["source", "variables"]`)
+- [x] Session always included regardless of `include` (minimal overhead, always needed)
+- [x] `globals` parameter — opt-in for PHP superglobals in variable output
+- [x] Handle "not paused" state gracefully (session running, no session, session stopped)
+- [x] Refactored `DebugTools.kt`: extracted reusable `extractSourceContext()`, `extractStackFrames()`, `extractVariables()` — shared by snapshot and variable_detail
+- [x] Removed individual tools (`debug_source_context`, `debug_stack_trace`, `debug_variables`) — redundant with `debug_snapshot(include: [...])`. They were implementation scaffolding not in the ToolDesign.md spec.
+- [x] Library detection on source context and stack frames (`(library)` annotation via `ProjectFileIndex.isInLibrary()`)
+- [x] All ReadAction threading issues resolved (SourceContextService, StackFrameService)
+- [x] Unit tests: formatSnapshot (5 cases covering full, partial, and filtered snapshots)
 
-**Test**: Pause at a breakpoint. Call `debug_snapshot` → verify the response matches PhpStorm's debug panel. Test `include: ["variables"]` returns only variables + position. Test with no active session → meaningful error.
+**Test**: Pause at a breakpoint. Call `debug_snapshot` → output matches PhpStorm's debug panel (session + source + variables + stack). Test `include: ["source", "variables"]` → no stack trace. Test `globals: true` → superglobals visible. ✅ Verified.
 
 ---
 
@@ -171,23 +191,53 @@ Each tool triggers an action and returns a snapshot when the debugger pauses aga
 
 ---
 
+## Milestone 5.5: Variable Detail Inspection ✅
+
+Pulled forward from Milestone 6 — deep variable inspection before navigation tools.
+
+- [x] `debug_variable_detail` — expand variables to see properties/children
+- [x] Dot-path notation for nested access: `$engine`, `$engine.pattern`, `$items.0.name`
+- [x] Optional path: omit to expand all top-level variables, specify to drill into specific ones
+- [x] Comma-separated paths for multiple variables: `$engine, $result`
+- [x] Configurable `depth` parameter (0 = flat like `debug_variables`, 1+ = expand children)
+- [x] Type display in detail view: `{int} 55`, `{string} "hello"`, `{CompiledPattern}`
+- [x] Tree formatting with indentation for nested structures
+- [x] Flexible path resolution: handles `$` prefix mismatch between parsePath and Xdebug names
+- [x] Xdebug inherited property matching: `parent` matches `*TypedPatternEngine\Nodes\AstNode*parent` (the `*ClassName*propertyName` convention Xdebug uses for inherited private/protected properties)
+- [x] Ambiguity handling: when a short name matches multiple `*ClassName*prop` entries, returns error with options — agent uses full name to disambiguate
+- [x] Circular reference detection: tracks object types (FQCNs) along the ancestor chain during depth expansion. When a child's type matches an ancestor, marks it `(circular reference)` instead of expanding. Arrays excluded (they legitimately nest). Prevents infinite expansion of parent-child back-references (e.g., `child.parent → parentNode → children → ...`).
+- [x] Explicit path navigation bypasses cycle detection — agent can drill into circular references intentionally via full path (e.g., `$ast.children.0.parent.children.0.text`)
+- [x] `globals` filter applies when no path specified
+- [x] `VariablePathException` with available-variable hints on path-not-found
+- [x] Recursive `expandValue()` with depth control and ancestor type tracking
+- [x] `parsePath()` companion function (strips `$`, splits on `.`)
+- [x] `isObjectType()` — classifies types as object (FQCN) vs scalar/array for cycle tracking
+- [x] `matchesSegment()` — flexible name matching (exact, `$`-prefixed, `*Class*prop` suffix)
+- [x] Unit tests: parsePath (6 cases), matchesSegment (8 cases), isObjectType (2 tests), getVariableDetail (6 cases + error + ambiguity + circular bypass), circularCases (2 cases), circularArrayCases (1 case), formatVariableDetail (7 cases incl. circular), getAllVariableDetails via buildDetailService
+
+**Design decision — circular reference detection**: XValue doesn't expose object identity (no Xdebug handle accessible through the API), and each `computeChildren` call creates fresh XValue wrappers, so Java object identity doesn't work. Instead we track object types (FQCNs) in the ancestor chain — if a type reappears, it's likely a back-reference. Trade-off: false positives for legitimately nested same-type objects (e.g., nested SequenceNode), but this is rare and the agent can bypass via explicit paths. We considered using Xdebug object IDs but decided against it — they'd require accessing PhpStorm's internal PHP debug classes via reflection (fragile, breaks on upgrades), and displaying them in output would add noise for no actionable benefit.
+
+**Test**: Pause at breakpoint. `debug_variable_detail` with no path → shows all variables expanded. `$engine` → shows engine's properties. `$engine.ast` → drills into nested object. `$foo` (scalar) → just shows value. Comma-separated paths work. Type annotations visible. Circular references show `(circular reference)` instead of infinite expansion. Explicit paths through cycles work. ✅ Verified.
+
+---
+
 ## Milestone 6: Deep Inspection
 
 - [ ] `debug_inspect_frame` — switch to a different stack frame, return snapshot at that scope
-- [ ] `debug_variable_detail` — expand nested variables by path (e.g. `$request.headers`)
 - [ ] `debug_evaluate` — evaluate PHP expression in current context
 - [ ] `debug_set_value` — modify a variable at runtime
 
-**Test**: Pause at a breakpoint. Call `debug_inspect_frame(2)` → verify variables match that frame's scope. Call `debug_variable_detail("$request")` → verify children match the Variables panel. Call `debug_evaluate("count($items)")` → verify result. Call `debug_set_value("$count", "99")` → verify variable changed in PhpStorm.
+**Test**: Pause at a breakpoint. Call `debug_inspect_frame(2)` → verify variables match that frame's scope. Call `debug_evaluate("count($items)")` → verify result. Call `debug_set_value("$count", "99")` → verify variable changed in PhpStorm.
 
 ---
 
 ## Milestone 7: Integration & Polish
 
-- [ ] Error handling: graceful responses for no session, session running (not paused), invalid paths
 - [ ] Multi-session: verify all tools work correctly with 2+ concurrent sessions
-- [ ] Edge cases: very large stack traces, deeply nested objects, long string values
+- [ ] Edge cases: very large stack traces, long string values
 - [ ] Performance: snapshot generation should be fast, variable expansion should be lazy
+- [x] ~~Edge case: deeply nested objects~~ — handled by circular reference detection in Milestone 5.5
+- [x] ~~Error handling: no session, session running, invalid paths~~ — handled across Milestones 4c/4d/5.5
 
 ---
 

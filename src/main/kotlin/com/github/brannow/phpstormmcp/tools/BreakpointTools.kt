@@ -2,6 +2,7 @@ package com.github.brannow.phpstormmcp.tools
 
 import com.github.brannow.phpstormmcp.statusbar.McpActivityLog
 import com.intellij.openapi.project.Project
+import com.intellij.xdebugger.XDebuggerManager
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.ToolAnnotations
@@ -10,6 +11,23 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
+
+/**
+ * Get the current debug pause position as project-relative file + 1-based line.
+ * Returns null if no session is paused.
+ */
+internal fun getActiveDebugLocation(project: Project): Pair<String, Int>? {
+    val session = XDebuggerManager.getInstance(project).currentSession ?: return null
+    if (!session.isSuspended) return null
+    val position = session.currentPosition ?: return null
+    val basePath = project.basePath
+    val file = if (basePath != null && position.file.path.startsWith(basePath)) {
+        position.file.path.removePrefix(basePath).removePrefix("/")
+    } else {
+        position.file.path
+    }
+    return file to (position.line + 1)
+}
 
 internal fun parseLocation(location: String): Pair<String, Int>? {
     val colonIndex = location.lastIndexOf(':')
@@ -22,23 +40,23 @@ internal fun parseLocation(location: String): Pair<String, Int>? {
 /**
  * Not-found response: show the agent what exists so it can self-correct.
  */
-internal fun notFoundResponse(query: String, service: BreakpointService): CallToolResult {
+internal fun notFoundResponse(query: String, service: BreakpointService, activeLocation: Pair<String, Int>? = null): CallToolResult {
     val all = service.listBreakpoints()
     if (all.isEmpty()) return err("Breakpoint '$query' not found, no breakpoints in project")
-    return err("Breakpoint '$query' not found, current breakpoints:\n\n${formatBreakpointIndex(all)}")
+    return err("Breakpoint '$query' not found, current breakpoints:\n\n${formatBreakpointIndex(all, activeLocation)}")
 }
 
 /**
  * Ambiguous response: list all at that location + guidance.
  */
-internal fun ambiguousResponse(query: String, breakpoints: List<BreakpointInfo>): CallToolResult {
+internal fun ambiguousResponse(query: String, breakpoints: List<BreakpointInfo>, activeLocation: Pair<String, Int>? = null): CallToolResult {
     val location = if (breakpoints.isNotEmpty()) "${breakpoints[0].file}:${breakpoints[0].line}" else query
-    return err("${formatBreakpointGroup(location, breakpoints)}\n\nChoose a breakpoint via #ID or remove other breakpoints first.")
+    return err("${formatBreakpointGroup(location, breakpoints, activeLocation)}\n\nChoose a breakpoint via #ID or remove other breakpoints first.")
 }
 
 // --- Extracted handler logic ---
 
-internal fun handleBreakpointList(service: BreakpointService, fileFilter: String?): CallToolResult {
+internal fun handleBreakpointList(service: BreakpointService, fileFilter: String?, activeLocation: Pair<String, Int>? = null): CallToolResult {
     val breakpoints = service.listBreakpoints(fileFilter)
     return when {
         breakpoints.isEmpty() && fileFilter != null && !service.fileExists(fileFilter) ->
@@ -48,7 +66,7 @@ internal fun handleBreakpointList(service: BreakpointService, fileFilter: String
         breakpoints.isEmpty() ->
             ok("No breakpoints in project")
         else ->
-            ok(formatBreakpointList(breakpoints))
+            ok(formatBreakpointList(breakpoints, activeLocation))
     }
 }
 
@@ -57,19 +75,24 @@ internal fun handleBreakpointAdd(
     location: String?,
     condition: String?,
     logExpression: String?,
-    suspend: Boolean
+    suspend: Boolean,
+    activeLocation: Pair<String, Int>? = null
 ): CallToolResult {
     if (location == null) return err("'location' is required")
     val (file, line) = parseLocation(location)
         ?: return err("Invalid location format. Expected file:line, e.g. \"src/index.php:15\"")
 
     val result = service.addBreakpoint(file, line, condition, logExpression, suspend)
-    val text = StringBuilder(formatBreakpoint(result.breakpoint))
+    val text = StringBuilder(formatBreakpoint(result.breakpoint, activeLocation))
 
     if (result.existingBreakpoints.isNotEmpty()) {
         val loc = "${result.breakpoint.file}:${result.breakpoint.line}"
-        text.append("\n\n$loc also has other breakpoints (multi-breakpoint-line):\n")
-        text.append(formatBreakpointGroupChildren(result.existingBreakpoints))
+        val allOnLine = result.existingBreakpoints + result.breakpoint
+        text.append("\n\n$loc (multi-breakpoint-line)")
+        for (bp in allOnLine) {
+            val extra = if (bp.id == result.breakpoint.id) "new" else null
+            text.append("\n - #${bp.id}${formatAddAnnotations(bp, extra, activeLocation)}")
+        }
     }
 
     return ok(text.toString())
@@ -81,7 +104,8 @@ internal fun handleBreakpointUpdate(
     enabled: Boolean?,
     condition: String?,
     logExpression: String?,
-    suspend: Boolean?
+    suspend: Boolean?,
+    activeLocation: Pair<String, Int>? = null
 ): CallToolResult {
     if (id == null) return err("'id' is required")
     val hasChanges = enabled != null || condition != null || logExpression != null || suspend != null
@@ -93,19 +117,19 @@ internal fun handleBreakpointUpdate(
             return err("No changes specified. Use enabled, condition, log_expression, or suspend to update.")
         }
         val bp = service.updateBreakpoint(id, enabled, condition, logExpression, suspend)
-        ok(formatBreakpoint(bp))
+        ok(formatBreakpoint(bp, activeLocation))
     } catch (e: AmbiguousBreakpointException) {
-        ambiguousResponse(id, e.breakpoints)
+        ambiguousResponse(id, e.breakpoints, activeLocation)
     } catch (e: BreakpointNotFoundException) {
-        // ID problem is the primary error — report it regardless of whether changes were specified
-        notFoundResponse(id, service)
+        notFoundResponse(id, service, activeLocation)
     }
 }
 
 internal fun handleBreakpointRemove(
     service: BreakpointService,
     ids: List<String>?,
-    all: Boolean
+    all: Boolean,
+    activeLocation: Pair<String, Int>? = null
 ): CallToolResult {
     if (!all && ids.isNullOrEmpty()) {
         return err("Specify breakpoint(s) to remove or use all=true to remove all breakpoints")
@@ -120,11 +144,11 @@ internal fun handleBreakpointRemove(
     val text = StringBuilder()
 
     if (result.removed.isNotEmpty()) {
-        text.append(formatBreakpointList(result.removed))
+        text.append(formatBreakpointList(result.removed, activeLocation))
 
         val remaining = service.listBreakpoints()
         if (remaining.isNotEmpty()) {
-            text.append("\n\n${remaining.size} breakpoint(s) remaining:\n${formatBreakpointIndex(remaining)}")
+            text.append("\n\n${remaining.size} breakpoint(s) remaining:\n${formatBreakpointIndex(remaining, activeLocation)}")
         }
     }
 
@@ -138,7 +162,7 @@ internal fun handleBreakpointRemove(
         } else if (allBps.isEmpty()) {
             text.append("Breakpoint $notFoundStr not found, no breakpoints in project")
         } else {
-            text.append("Breakpoint $notFoundStr not found, current breakpoints:\n\n${formatBreakpointIndex(allBps)}")
+            text.append("Breakpoint $notFoundStr not found, current breakpoints:\n\n${formatBreakpointIndex(allBps, activeLocation)}")
         }
     }
 
@@ -176,7 +200,7 @@ fun Server.registerBreakpointTools(project: Project) {
         val fileFilter = request.arguments?.get("file")?.jsonPrimitive?.content
         activityLog.log("breakpoint_list" + if (fileFilter != null) " (file: $fileFilter)" else "")
         try {
-            handleBreakpointList(service, fileFilter)
+            handleBreakpointList(service, fileFilter, getActiveDebugLocation(project))
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }
@@ -221,7 +245,7 @@ fun Server.registerBreakpointTools(project: Project) {
 
         activityLog.log("breakpoint_add $location")
         try {
-            handleBreakpointAdd(service, location, condition, logExpression, suspend)
+            handleBreakpointAdd(service, location, condition, logExpression, suspend, getActiveDebugLocation(project))
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }
@@ -271,7 +295,7 @@ fun Server.registerBreakpointTools(project: Project) {
 
         activityLog.log("breakpoint_update $id")
         try {
-            handleBreakpointUpdate(service, id, enabled, condition, logExpression, suspend)
+            handleBreakpointUpdate(service, id, enabled, condition, logExpression, suspend, getActiveDebugLocation(project))
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }
@@ -307,9 +331,10 @@ fun Server.registerBreakpointTools(project: Project) {
 
         activityLog.log(if (all) "breakpoint_remove (all)" else "breakpoint_remove ${ids?.joinToString()}")
         try {
-            handleBreakpointRemove(service, ids, all)
+            val activeLocation = getActiveDebugLocation(project)
+            handleBreakpointRemove(service, ids, all, activeLocation)
         } catch (e: AmbiguousBreakpointException) {
-            ambiguousResponse(idParam ?: "", e.breakpoints)
+            ambiguousResponse(idParam ?: "", e.breakpoints, getActiveDebugLocation(project))
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }

@@ -81,6 +81,7 @@ class SessionToolsTest {
             override fun getDebuggerManager() = manager
             override fun sessionId(session: XDebugSession) =
                 mockSessions.entries.first { it.value === session }.key.id
+            override fun <T> readAction(action: () -> T): T = action()
             override fun runOnEdt(action: () -> Unit) = action()
         }
         return service
@@ -186,7 +187,7 @@ class SessionToolsTest {
                 sessions = listOf(
                     SessionState("111", "index.php", suspended = true, file = "src/index.php", line = 5, active = true)
                 ),
-                expectedOutput = "#111 \"index.php\" at src/index.php:5 (active)",
+                expectedOutput = "#111 \"index.php\" [stopped] at src/index.php:5",
             ),
             StopCase(
                 name = "no params, multiple sessions → stops active",
@@ -194,7 +195,7 @@ class SessionToolsTest {
                     SessionState("111", "index.php", suspended = true, file = "src/index.php", line = 5, active = true),
                     SessionState("222", "test.php", suspended = true, file = "src/test.php", line = 10, active = false),
                 ),
-                expectedOutput = "#111 \"index.php\" at src/index.php:5 (active)\n\n1 session(s) remaining:\n#222 \"test.php\" at src/test.php:10",
+                expectedOutput = "#111 \"index.php\" [stopped] at src/index.php:5\n\n1 session(s) remaining:\n#222 \"test.php\" at src/test.php:10",
             ),
             StopCase(
                 name = "by ID",
@@ -202,7 +203,7 @@ class SessionToolsTest {
                     SessionState("111", "index.php", suspended = true, file = "src/index.php", line = 5, active = true)
                 ),
                 sessionId = "111",
-                expectedOutput = "#111 \"index.php\" at src/index.php:5 (active)",
+                expectedOutput = "#111 \"index.php\" [stopped] at src/index.php:5",
             ),
             StopCase(
                 name = "by ID with hash prefix",
@@ -210,7 +211,7 @@ class SessionToolsTest {
                     SessionState("111", "index.php", suspended = true, file = "src/index.php", line = 5, active = true)
                 ),
                 sessionId = "#111",
-                expectedOutput = "#111 \"index.php\" at src/index.php:5 (active)",
+                expectedOutput = "#111 \"index.php\" [stopped] at src/index.php:5",
             ),
             StopCase(
                 name = "not found ID, has active sessions",
@@ -241,7 +242,7 @@ class SessionToolsTest {
                     SessionState("222", "test.php", suspended = true, file = "src/test.php", line = 10, active = false),
                 ),
                 all = true,
-                expectedOutput = "#111 \"index.php\" at src/index.php:5 (active)\n#222 \"test.php\" at src/test.php:10",
+                expectedOutput = "#111 \"index.php\" [stopped] at src/index.php:5\n#222 \"test.php\" [stopped] at src/test.php:10",
             ),
         )
     }

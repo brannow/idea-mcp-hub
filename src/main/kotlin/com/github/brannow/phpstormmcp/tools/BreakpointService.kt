@@ -1,6 +1,7 @@
 package com.github.brannow.phpstormmcp.tools
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.roots.ProjectFileIndex
 import com.intellij.openapi.components.Service
@@ -54,6 +55,7 @@ class BreakpointService(private val project: Project) {
         fun resolveFile(path: String): VirtualFile?
         fun getLineCount(file: VirtualFile): Int
         fun isLibrary(file: VirtualFile): Boolean
+        fun <T> readAction(action: () -> T): T
         fun <T> runOnEdt(action: () -> T): T
     }
 
@@ -83,6 +85,10 @@ class BreakpointService(private val project: Project) {
             return ProjectFileIndex.getInstance(project).isInLibrary(file)
         }
 
+        override fun <T> readAction(action: () -> T): T {
+            return ReadAction.compute<T, Throwable> { action() }
+        }
+
         override fun <T> runOnEdt(action: () -> T): T {
             val future = CompletableFuture<T>()
             ApplicationManager.getApplication().invokeLater {
@@ -92,9 +98,9 @@ class BreakpointService(private val project: Project) {
         }
     }
 
-    fun listBreakpoints(fileFilter: String? = null): List<BreakpointInfo> {
+    fun listBreakpoints(fileFilter: String? = null): List<BreakpointInfo> = platform.readAction {
         val manager = platform.getBreakpointManager()
-        return manager.allBreakpoints
+        manager.allBreakpoints
             .filterIsInstance<XLineBreakpoint<*>>()
             .filter { !manager.isDefaultBreakpoint(it) }
             .mapNotNull { bp -> toBreakpointInfo(bp) }
@@ -108,25 +114,27 @@ class BreakpointService(private val project: Project) {
         logExpression: String? = null,
         suspend: Boolean = true
     ): AddBreakpointResult {
-        val type = platform.findLineBreakpointType()
-            ?: throw IllegalStateException("PHP line breakpoint type not available. Is the PHP plugin active?")
+        val (type, virtualFile, existing) = platform.readAction {
+            val type = platform.findLineBreakpointType()
+                ?: throw IllegalStateException("PHP line breakpoint type not available. Is the PHP plugin active?")
 
-        val virtualFile = platform.resolveFile(file)
-            ?: throw IllegalArgumentException("File not found: $file")
+            val virtualFile = platform.resolveFile(file)
+                ?: throw IllegalArgumentException("File not found: $file")
 
-        if (line < 1) {
-            throw IllegalArgumentException("Line must be >= 1, got $line")
-        }
+            if (line < 1) {
+                throw IllegalArgumentException("Line must be >= 1, got $line")
+            }
 
-        val lineCount = platform.getLineCount(virtualFile)
-        if (lineCount > 0 && line > lineCount) {
-            throw IllegalArgumentException("Line $line is beyond end of file ($file has $lineCount lines)")
+            val lineCount = platform.getLineCount(virtualFile)
+            if (lineCount > 0 && line > lineCount) {
+                throw IllegalArgumentException("Line $line is beyond end of file ($file has $lineCount lines)")
+            }
+
+            Triple(type, virtualFile, findBreakpointsAtLine(virtualFile, line - 1))
         }
 
         val fileUrl = virtualFile.url
         val zeroBasedLine = line - 1
-
-        val existing = findBreakpointsAtLine(virtualFile, zeroBasedLine)
 
         val info = platform.runOnEdt {
             @Suppress("UNCHECKED_CAST")
@@ -163,7 +171,7 @@ class BreakpointService(private val project: Project) {
         logExpression: String? = null,
         suspend: Boolean? = null
     ): BreakpointInfo {
-        val bp = findBreakpointById(id)
+        val bp = platform.readAction { findBreakpointById(id) }
             ?: throw BreakpointNotFoundException(id)
 
         return platform.runOnEdt {
@@ -188,10 +196,12 @@ class BreakpointService(private val project: Project) {
         val manager = platform.getBreakpointManager()
 
         if (ids.isNullOrEmpty()) {
-            val allBps = manager.allBreakpoints
-                .filterIsInstance<XLineBreakpoint<*>>()
-                .filter { !manager.isDefaultBreakpoint(it) }
-            val infos = allBps.mapNotNull { toBreakpointInfo(it) }
+            val (allBps, infos) = platform.readAction {
+                val allBps = manager.allBreakpoints
+                    .filterIsInstance<XLineBreakpoint<*>>()
+                    .filter { !manager.isDefaultBreakpoint(it) }
+                allBps to allBps.mapNotNull { toBreakpointInfo(it) }
+            }
 
             if (allBps.isNotEmpty()) {
                 platform.runOnEdt { allBps.forEach { manager.removeBreakpoint(it) } }
@@ -201,22 +211,25 @@ class BreakpointService(private val project: Project) {
         }
 
         // Resolve each ID — can be numeric, file:line, or file-only (purge)
-        val toRemove = mutableListOf<XLineBreakpoint<*>>()
-        val toRemoveInfos = mutableListOf<BreakpointInfo>()
-        val notFound = mutableListOf<String>()
+        val (toRemove, toRemoveInfos, notFound) = platform.readAction {
+            val toRemove = mutableListOf<XLineBreakpoint<*>>()
+            val toRemoveInfos = mutableListOf<BreakpointInfo>()
+            val notFound = mutableListOf<String>()
 
-        for (id in ids) {
-            val resolved = resolveForRemoval(id)
-            if (resolved.isEmpty()) {
-                notFound.add(id)
-            } else {
-                for (bp in resolved) {
-                    if (bp !in toRemove) {
-                        toRemove.add(bp)
-                        toBreakpointInfo(bp)?.let { toRemoveInfos.add(it) }
+            for (id in ids) {
+                val resolved = resolveForRemoval(id)
+                if (resolved.isEmpty()) {
+                    notFound.add(id)
+                } else {
+                    for (bp in resolved) {
+                        if (bp !in toRemove) {
+                            toRemove.add(bp)
+                            toBreakpointInfo(bp)?.let { toRemoveInfos.add(it) }
+                        }
                     }
                 }
             }
+            Triple(toRemove, toRemoveInfos, notFound)
         }
 
         if (toRemove.isNotEmpty()) {
@@ -325,7 +338,7 @@ class BreakpointService(private val project: Project) {
         return null
     }
 
-    fun fileExists(path: String): Boolean = platform.resolveFile(path) != null
+    fun fileExists(path: String): Boolean = platform.readAction { platform.resolveFile(path) != null }
 
     private fun toProjectRelativePath(absolutePath: String): String {
         val basePath = project.basePath ?: return absolutePath

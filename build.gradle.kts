@@ -28,6 +28,7 @@ dependencies {
             providers.gradleProperty("platformType").get(),
             providers.gradleProperty("platformVersion").get()
         )
+        bundledPlugin("com.jetbrains.php")
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.JUnit5)
     }
 

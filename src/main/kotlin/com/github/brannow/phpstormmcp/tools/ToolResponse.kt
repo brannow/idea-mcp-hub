@@ -22,8 +22,8 @@ fun err(text: String) = CallToolResult(content = listOf(TextContent(text)), isEr
 
 // --- Breakpoint formatting ---
 
-fun formatBreakpoint(bp: BreakpointInfo): String {
-    val annotations = formatAnnotations(bp)
+fun formatBreakpoint(bp: BreakpointInfo, activeLocation: Pair<String, Int>? = null): String {
+    val annotations = formatAnnotations(bp, activeLocation)
     val suffix = if (annotations.isNotEmpty()) " ($annotations)" else ""
     return "#${bp.id} ${bp.file}:${bp.line}$suffix"
 }
@@ -33,16 +33,20 @@ fun formatBreakpoint(bp: BreakpointInfo): String {
  * to know what exists so it can self-correct.
  * Same-line breakpoints get grouped with a (multi-breakpoint-line) hint.
  */
-fun formatBreakpointIndex(breakpoints: List<BreakpointInfo>): String {
+fun formatBreakpointIndex(breakpoints: List<BreakpointInfo>, activeLocation: Pair<String, Int>? = null): String {
     val grouped = linkedMapOf<String, MutableList<BreakpointInfo>>()
     for (bp in breakpoints) {
         grouped.getOrPut("${bp.file}:${bp.line}") { mutableListOf() }.add(bp)
     }
     return grouped.entries.joinToString("\n") { (location, bps) ->
         if (bps.size == 1) {
-            "#${bps.first().id} $location"
+            val bp = bps.first()
+            val active = if (isActiveBreakpoint(bp, activeLocation)) " (active)" else ""
+            "#${bp.id} $location$active"
         } else {
-            "$location (multi-breakpoint-line)\n${bps.joinToString("\n") { " - #${it.id}" }}"
+            val isActive = activeLocation != null && bps.any { isActiveBreakpoint(it, activeLocation) }
+            val header = if (isActive) "$location (active, multi-breakpoint-line)" else "$location (multi-breakpoint-line)"
+            "$header\n${bps.joinToString("\n") { " - #${it.id}" }}"
         }
     }
 }
@@ -50,7 +54,7 @@ fun formatBreakpointIndex(breakpoints: List<BreakpointInfo>): String {
 /**
  * Smart list: single breakpoints stay flat, same-line breakpoints get grouped.
  */
-fun formatBreakpointList(breakpoints: List<BreakpointInfo>): String {
+fun formatBreakpointList(breakpoints: List<BreakpointInfo>, activeLocation: Pair<String, Int>? = null): String {
     // Group by file:line, preserve insertion order
     val grouped = linkedMapOf<String, MutableList<BreakpointInfo>>()
     for (bp in breakpoints) {
@@ -59,9 +63,9 @@ fun formatBreakpointList(breakpoints: List<BreakpointInfo>): String {
 
     return grouped.entries.joinToString("\n") { (location, bps) ->
         if (bps.size == 1) {
-            formatBreakpoint(bps.first())
+            formatBreakpoint(bps.first(), activeLocation)
         } else {
-            formatBreakpointGroup(location, bps)
+            formatBreakpointGroup(location, bps, activeLocation)
         }
     }
 }
@@ -78,15 +82,29 @@ fun formatBreakpointGroupChildren(breakpoints: List<BreakpointInfo>): String {
     }
 }
 
+
 /**
  * Full grouped view: location as header with hint, breakpoints as indented bullets.
+ * Active is shown on the group header, not individual breakpoints (we can't know which one triggered).
  */
-fun formatBreakpointGroup(location: String, breakpoints: List<BreakpointInfo>): String {
-    return "$location (multi-breakpoint-line)\n${formatBreakpointGroupChildren(breakpoints)}"
+/**
+ * Full grouped view: location as header with hint, breakpoints as indented bullets.
+ * With exact breakpoint ID matching, the specific active breakpoint is marked in the group.
+ */
+fun formatBreakpointGroup(location: String, breakpoints: List<BreakpointInfo>, activeLocation: Pair<String, Int>? = null): String {
+    val isActive = activeLocation != null && breakpoints.any { isActiveBreakpoint(it, activeLocation) }
+    val header = if (isActive) "$location (active, multi-breakpoint-line)" else "$location (multi-breakpoint-line)"
+    return "$header\n${formatBreakpointGroupChildren(breakpoints)}"
 }
 
-private fun formatAnnotations(bp: BreakpointInfo): String {
+private fun isActiveBreakpoint(bp: BreakpointInfo, activeLocation: Pair<String, Int>?): Boolean {
+    if (activeLocation == null) return false
+    return bp.file == activeLocation.first && bp.line == activeLocation.second
+}
+
+private fun formatAnnotations(bp: BreakpointInfo, activeLocation: Pair<String, Int>? = null): String {
     val annotations = mutableListOf<String>()
+    if (isActiveBreakpoint(bp, activeLocation)) annotations.add("active")
     if (bp.method) annotations.add("method")
     if (bp.vendor) annotations.add("vendor")
     if (!bp.enabled) annotations.add("disabled")
@@ -96,12 +114,32 @@ private fun formatAnnotations(bp: BreakpointInfo): String {
     return annotations.joinToString(", ")
 }
 
+/**
+ * Annotations for breakpoint_add context list — supports an extra leading label (e.g. "new").
+ */
+fun formatAddAnnotations(bp: BreakpointInfo, extraLabel: String?, activeLocation: Pair<String, Int>? = null): String {
+    val annotations = mutableListOf<String>()
+    if (extraLabel != null) annotations.add(extraLabel)
+    if (isActiveBreakpoint(bp, activeLocation)) annotations.add("active")
+    if (bp.method) annotations.add("method")
+    if (bp.vendor) annotations.add("vendor")
+    if (!bp.enabled) annotations.add("disabled")
+    if (bp.condition != null) annotations.add("condition: ${bp.condition}")
+    if (bp.logExpression != null) annotations.add("log: ${bp.logExpression}")
+    if (!bp.suspend) annotations.add("no suspend")
+    return if (annotations.isNotEmpty()) " (${annotations.joinToString(", ")})" else ""
+}
+
 // --- Session formatting ---
 
 fun formatSession(session: SessionInfo): String {
     val parts = mutableListOf<String>()
-    // Only show status when it's non-default (running). Paused is the expected state.
-    val statusTag = if (session.status == "running") " [running]" else ""
+    // Only show status when it's non-default. Paused is the expected state.
+    val statusTag = when (session.status) {
+        "running" -> " [running]"
+        "stopped" -> " [stopped]"
+        else -> ""
+    }
     parts.add("#${session.id} \"${session.name}\"$statusTag")
 
     if (session.currentFile != null && session.currentLine != null) {
@@ -116,4 +154,163 @@ fun formatSession(session: SessionInfo): String {
 
 fun formatSessionList(sessions: List<SessionInfo>): String {
     return sessions.joinToString("\n") { formatSession(it) }
+}
+
+// --- Snapshot formatting ---
+
+fun formatSnapshot(
+    session: SessionInfo?,
+    source: SourceContext?,
+    variables: List<VariableInfo>?,
+    frames: List<FrameInfo>?
+): String {
+    val sections = mutableListOf<String>()
+
+    // Session — always included
+    if (session != null) {
+        sections.add(formatSession(session))
+    }
+
+    // Source context
+    if (source != null) {
+        sections.add(formatSourceContext(source))
+    }
+
+    // Variables
+    if (variables != null) {
+        sections.add(formatVariables(variables))
+    }
+
+    // Stack trace
+    if (frames != null) {
+        sections.add(formatStackTrace(frames))
+    }
+
+    return sections.joinToString("\n\n")
+}
+
+// --- Source context formatting ---
+
+fun formatSourceContext(ctx: SourceContext): String {
+    val header = buildString {
+        if (ctx.className != null) {
+            append(ctx.className)
+            if (ctx.methodName != null) append("::${ctx.methodName}()")
+        } else if (ctx.methodName != null) {
+            append("${ctx.methodName}()")
+        }
+        if (isNotEmpty()) append(" — ")
+        append("${ctx.file}:${ctx.line}")
+        if (ctx.isLibrary) append(" (library)")
+    }
+    return "$header\n\n${ctx.formattedSource}"
+}
+
+// --- Stack frame formatting ---
+
+// --- Variable formatting ---
+
+private val PHP_SUPERGLOBALS = setOf(
+    "\$_ENV", "\$_SERVER", "\$_GET", "\$_POST", "\$_SESSION",
+    "\$_COOKIE", "\$_FILES", "\$_REQUEST", "\$GLOBALS"
+)
+
+fun filterGlobals(variables: List<VariableInfo>, includeGlobals: Boolean): List<VariableInfo> {
+    if (includeGlobals) return variables
+    return variables.filter { v ->
+        val name = if (v.name.startsWith("$")) v.name else "$${v.name}"
+        name !in PHP_SUPERGLOBALS
+    }
+}
+
+fun formatVariables(variables: List<VariableInfo>): String {
+    if (variables.isEmpty()) return "(no variables)"
+    return variables.joinToString("\n") { formatVariable(it) }
+}
+
+fun formatVariable(v: VariableInfo): String {
+    val name = if (v.name.startsWith("$")) v.name else "$${v.name}"
+    val display = when {
+        v.value.isNotEmpty() && v.type != null && !v.hasChildren -> "{${v.type}} ${v.value}"
+        v.value.isNotEmpty() -> v.value
+        v.type != null -> "{${v.type}}"
+        else -> "(unknown)"
+    }
+    return "$name = $display"
+}
+
+// --- Variable detail formatting ---
+
+fun formatVariableDetail(node: VariableNode, path: String): String {
+    val display = variableDisplayValue(node)
+    val circularTag = if (node.circular) " (circular reference)" else ""
+    val header = "$path = $display$circularTag"
+    val children = node.children
+    if (children.isNullOrEmpty()) return header
+    return "$header\n${formatVariableChildren(children, indent = 1)}"
+}
+
+fun formatVariableDetailList(nodes: List<VariableNode>): String {
+    if (nodes.isEmpty()) return "(no variables)"
+    return nodes.joinToString("\n") { node ->
+        val name = if (node.name.startsWith("$")) node.name else "$${node.name}"
+        val display = variableDisplayValue(node)
+        val circularTag = if (node.circular) " (circular reference)" else ""
+        val line = "$name = $display$circularTag"
+        val children = node.children
+        if (children.isNullOrEmpty()) {
+            line
+        } else {
+            "$line\n${formatVariableChildren(children, indent = 1)}"
+        }
+    }
+}
+
+fun filterGlobalNodes(nodes: List<VariableNode>, includeGlobals: Boolean): List<VariableNode> {
+    if (includeGlobals) return nodes
+    return nodes.filter { v ->
+        val name = if (v.name.startsWith("$")) v.name else "$${v.name}"
+        name !in PHP_SUPERGLOBALS
+    }
+}
+
+private fun formatVariableChildren(children: List<VariableNode>, indent: Int): String {
+    val prefix = "  ".repeat(indent)
+    return children.joinToString("\n") { child ->
+        val display = variableDisplayValue(child)
+        val circularTag = if (child.circular) " (circular reference)" else ""
+        val line = "$prefix${child.name} = $display$circularTag"
+        val nested = child.children
+        if (nested.isNullOrEmpty()) {
+            line
+        } else {
+            "$line\n${formatVariableChildren(nested, indent + 1)}"
+        }
+    }
+}
+
+private fun variableDisplayValue(node: VariableNode): String {
+    return when {
+        node.value.isNotEmpty() && node.type != null -> "{${node.type}} ${node.value}"
+        node.value.isNotEmpty() -> node.value
+        node.type != null -> "{${node.type}}"
+        else -> "(unknown)"
+    }
+}
+
+// --- Stack frame formatting ---
+
+fun formatStackTrace(frames: List<FrameInfo>, activeDepth: Int = 0): String {
+    if (frames.isEmpty()) return "(no stack frames)"
+    return frames.joinToString("\n") { frame ->
+        val location = when {
+            frame.file != null && frame.line != null -> "${frame.file}:${frame.line}"
+            frame.file != null -> frame.file
+            else -> "(unknown)"
+        }
+        val name = frame.name ?: "(unknown)"
+        val lib = if (frame.isLibrary) " (library)" else ""
+        val prefix = if (frame.depth == activeDepth) "→" else " "
+        "$prefix#${frame.depth} $name at $location$lib"
+    }
 }
