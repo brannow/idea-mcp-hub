@@ -5,10 +5,13 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.openapi.project.Project
 import com.intellij.ui.SimpleTextAttributes
+import com.intellij.xdebugger.evaluation.XDebuggerEvaluator
 import com.intellij.xdebugger.frame.*
 import com.intellij.xdebugger.frame.presentation.XValuePresentation
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import javax.swing.Icon
 
 data class VariableInfo(
@@ -28,6 +31,7 @@ data class VariableNode(
 )
 
 class VariablePathException(message: String) : IllegalArgumentException(message)
+class EvaluationException(message: String) : RuntimeException(message)
 
 @Service(Service.Level.PROJECT)
 class VariableService(private val project: Project) {
@@ -35,6 +39,7 @@ class VariableService(private val project: Project) {
     internal interface Platform {
         fun computeChildren(container: XValueContainer): List<Pair<String, XValue>>
         fun computePresentation(value: XValue): VariablePresentation
+        fun evaluate(evaluator: XDebuggerEvaluator, expression: String): XValue
     }
 
     internal data class VariablePresentation(
@@ -127,6 +132,48 @@ class VariableService(private val project: Project) {
 
             return future.get(5, TimeUnit.SECONDS)
         }
+
+        override fun evaluate(evaluator: XDebuggerEvaluator, expression: String): XValue {
+            val future = CompletableFuture<XValue>()
+
+            ApplicationManager.getApplication().invokeLater {
+                evaluator.evaluate(expression, object : XDebuggerEvaluator.XEvaluationCallback {
+                    override fun evaluated(result: XValue) {
+                        future.complete(result)
+                    }
+
+                    override fun errorOccurred(errorMessage: String) {
+                        future.completeExceptionally(EvaluationException(errorMessage))
+                    }
+                }, null)
+            }
+
+            return future.get(10, TimeUnit.SECONDS)
+        }
+
+    }
+
+    /**
+     * Evaluate a PHP expression in the current frame's scope.
+     * Returns a VariableNode representing the result, expanded to the requested depth.
+     */
+    fun evaluateExpression(frame: XStackFrame, expression: String, depth: Int = 0): VariableNode {
+        val evaluator = frame.evaluator
+            ?: throw EvaluationException("Evaluation not supported in this frame")
+        val xValue = try {
+            platform.evaluate(evaluator, expression)
+        } catch (e: EvaluationException) {
+            throw e
+        } catch (e: ExecutionException) {
+            val cause = e.cause
+            if (cause is EvaluationException) throw cause
+            throw EvaluationException(cause?.message ?: "Evaluation failed")
+        } catch (e: TimeoutException) {
+            throw EvaluationException("Evaluation timed out")
+        } catch (e: Exception) {
+            throw EvaluationException(e.message ?: "Evaluation failed")
+        }
+        return expandValue("(eval)", xValue, depth, emptySet())
     }
 
     /**
@@ -180,10 +227,18 @@ class VariableService(private val project: Project) {
      * Returns a VariableNode tree expanded to the requested depth.
      */
     fun getVariableDetail(frame: XStackFrame, path: String, depth: Int = 1): VariableNode {
+        val (name, xValue) = resolvePathToXValue(frame, path)
+        return expandValue(name, xValue, depth, emptySet())
+    }
+
+    /**
+     * Walk a dot-path and return the target XValue.
+     * Shared by getVariableDetail (expand) and setVariableValue (modify).
+     */
+    private fun resolvePathToXValue(frame: XStackFrame, path: String): Pair<String, XValue> {
         val segments = parsePath(path)
         if (segments.isEmpty()) throw VariablePathException("Empty path")
 
-        // Resolve the target XValue by walking the path
         val rootChildren = try {
             platform.computeChildren(frame)
         } catch (e: Exception) {
@@ -195,9 +250,6 @@ class VariableService(private val project: Project) {
         var targetValue: XValue? = null
 
         for ((idx, segment) in segments.withIndex()) {
-            // Match flexibly:
-            // - "result" matches "result" and "$result"
-            // - "parent" matches "*TypedPatternEngine\Nodes\AstNode*parent" (inherited property naming)
             val matches = currentChildren.filter {
                 matchesSegment(it.first, segment)
             }
@@ -220,7 +272,6 @@ class VariableService(private val project: Project) {
             targetName = segment
             targetValue = match.second
 
-            // If there are more segments, drill deeper
             if (idx < segments.size - 1) {
                 currentChildren = try {
                     platform.computeChildren(match.second)
@@ -231,8 +282,7 @@ class VariableService(private val project: Project) {
             }
         }
 
-        // Now expand the target to the requested depth
-        return expandValue(targetName, targetValue!!, depth, emptySet())
+        return targetName to targetValue!!
     }
 
     /**

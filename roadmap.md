@@ -228,20 +228,10 @@ Pulled forward from Milestone 6 — deep variable inspection before navigation t
 ## Milestone 6: Deep Inspection
 
 - [x] `debug_inspect_frame` — switch to a different stack frame (via `setCurrentStackFrame`), return snapshot at that scope. Reuses `debug_snapshot` code path — no duplication.
-- [ ] `debug_evaluate` — evaluate PHP expression in current context
-- [ ] `debug_set_value` — modify a variable at runtime
+- [x] `debug_evaluate` — evaluate PHP expression in current debug scope. Returns position context + result. Supports `depth` parameter (default 1) for expanding object/array results. Errors show raw Xdebug message (no wrapper noise). Reuses `expandValue` from variable detail, `formatSourceHeader` extracted from `formatSourceContext`. Not read-only (`openWorldHint = true`) — expressions can have side effects including variable modification (`$bar = 'new value'`).
+- [x] ~~`debug_set_value`~~ — dropped. `debug_evaluate` already handles assignments (`$bar = 'test'`, `$this->name = 'new'`). The `XValueModifier` API had callback/timeout issues, and a separate tool adds complexity with zero capability gain.
 
-**Test**: Pause at a breakpoint. Call `debug_inspect_frame(2)` → verify variables match that frame's scope. Call `debug_evaluate("count($items)")` → verify result. Call `debug_set_value("$count", "99")` → verify variable changed in PhpStorm.
-
----
-
-## Milestone 7: Integration & Polish
-
-- [ ] Multi-session: verify all tools work correctly with 2+ concurrent sessions
-- [ ] Edge cases: very large stack traces, long string values
-- [ ] Performance: snapshot generation should be fast, variable expansion should be lazy
-- [x] ~~Edge case: deeply nested objects~~ — handled by circular reference detection in Milestone 5.5
-- [x] ~~Error handling: no session, session running, invalid paths~~ — handled across Milestones 4c/4d/5.5
+**Test**: Pause at a breakpoint. Call `debug_inspect_frame(2)` → verify variables match that frame's scope. Call `debug_evaluate("count($items)")` → verify result. Call `debug_evaluate("$bar = 'test'")` → verify variable changed. ✅ Verified.
 
 ---
 

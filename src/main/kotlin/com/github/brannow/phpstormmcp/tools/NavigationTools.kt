@@ -142,10 +142,9 @@ fun Server.registerNavigationTools(project: Project) {
     // --- debug_step ---
     addTool(
         name = "debug_step",
-        description = "Control debugger execution. Requires a paused debug session. " +
-                "Actions: over (next line, same scope), into (enter function call), " +
-                "out (run until current function returns), continue (resume until next breakpoint or end). " +
-                "Returns a debug snapshot after the debugger pauses again, or session-ended status.",
+        description = "Step through code. Actions: over (next line), into (enter function), " +
+                "out (finish function), continue (resume to next breakpoint). " +
+                "Returns a debug_snapshot after pausing. Requires a paused session.",
         toolAnnotations = navigationAnnotations,
         inputSchema = ToolSchema(
             properties = buildJsonObject {
@@ -195,9 +194,8 @@ fun Server.registerNavigationTools(project: Project) {
     // --- debug_run_to_line ---
     addTool(
         name = "debug_run_to_line",
-        description = "Continue execution until reaching a specific line (temporary breakpoint). " +
-                "Requires a paused debug session. " +
-                "Returns a debug snapshot at the target line, or session-ended if the line is not reached.",
+        description = "Run to a specific line and return a debug_snapshot. " +
+                "Requires a paused session.",
         toolAnnotations = navigationAnnotations,
         inputSchema = ToolSchema(
             properties = buildJsonObject {

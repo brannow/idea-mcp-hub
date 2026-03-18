@@ -192,8 +192,8 @@ fun formatSnapshot(
 
 // --- Source context formatting ---
 
-fun formatSourceContext(ctx: SourceContext): String {
-    val header = buildString {
+fun formatSourceHeader(ctx: SourceContext): String {
+    return buildString {
         if (ctx.className != null) {
             append(ctx.className)
             if (ctx.methodName != null) append("::${ctx.methodName}()")
@@ -204,7 +204,10 @@ fun formatSourceContext(ctx: SourceContext): String {
         append("${ctx.file}:${ctx.line}")
         if (ctx.isLibrary) append(" (library)")
     }
-    return "$header\n\n${ctx.formattedSource}"
+}
+
+fun formatSourceContext(ctx: SourceContext): String {
+    return "${formatSourceHeader(ctx)}\n\n${ctx.formattedSource}"
 }
 
 // --- Stack frame formatting ---
@@ -275,7 +278,7 @@ fun filterGlobalNodes(nodes: List<VariableNode>, includeGlobals: Boolean): List<
     }
 }
 
-private fun formatVariableChildren(children: List<VariableNode>, indent: Int): String {
+internal fun formatVariableChildren(children: List<VariableNode>, indent: Int): String {
     val prefix = "  ".repeat(indent)
     return children.joinToString("\n") { child ->
         val display = variableDisplayValue(child)
@@ -290,13 +293,35 @@ private fun formatVariableChildren(children: List<VariableNode>, indent: Int): S
     }
 }
 
-private fun variableDisplayValue(node: VariableNode): String {
+internal fun variableDisplayValue(node: VariableNode): String {
     return when {
         node.value.isNotEmpty() && node.type != null -> "{${node.type}} ${node.value}"
         node.value.isNotEmpty() -> node.value
         node.type != null -> "{${node.type}}"
         else -> "(unknown)"
     }
+}
+
+// --- Evaluation formatting ---
+
+fun formatEvaluationResult(expression: String, node: VariableNode, sourceHeader: String?): String {
+    val sections = mutableListOf<String>()
+
+    if (sourceHeader != null) {
+        sections.add("at $sourceHeader")
+    }
+
+    val display = variableDisplayValue(node)
+    val circularTag = if (node.circular) " (circular reference)" else ""
+    val header = "$expression = $display$circularTag"
+    val children = node.children
+    if (children.isNullOrEmpty()) {
+        sections.add(header)
+    } else {
+        sections.add("$header\n${formatVariableChildren(children, indent = 1)}")
+    }
+
+    return sections.joinToString("\n\n")
 }
 
 // --- Stack frame formatting ---

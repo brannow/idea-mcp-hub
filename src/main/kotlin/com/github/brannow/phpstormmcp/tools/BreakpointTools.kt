@@ -180,7 +180,7 @@ fun Server.registerBreakpointTools(project: Project) {
     // --- breakpoint_list ---
     addTool(
         name = "breakpoint_list",
-        description = "List all breakpoints. Optionally filter by file path substring.",
+        description = "List all breakpoints with their locations, conditions, and status.",
         toolAnnotations = ToolAnnotations(
             readOnlyHint = true,
             destructiveHint = false,
@@ -209,7 +209,7 @@ fun Server.registerBreakpointTools(project: Project) {
     // --- breakpoint_add ---
     addTool(
         name = "breakpoint_add",
-        description = "Add a line breakpoint. Optionally set a condition, log expression, or disable suspension.",
+        description = "Add a line breakpoint at a file:line location.",
         toolAnnotations = ToolAnnotations(
             readOnlyHint = false,
             destructiveHint = false,
@@ -254,7 +254,7 @@ fun Server.registerBreakpointTools(project: Project) {
     // --- breakpoint_update ---
     addTool(
         name = "breakpoint_update",
-        description = "Update an existing breakpoint's properties. Only provided fields are changed.",
+        description = "Modify an existing breakpoint. Only provided fields are changed.",
         toolAnnotations = ToolAnnotations(
             readOnlyHint = false,
             destructiveHint = false,
@@ -304,7 +304,7 @@ fun Server.registerBreakpointTools(project: Project) {
     // --- breakpoint_remove ---
     addTool(
         name = "breakpoint_remove",
-        description = "Remove breakpoints by #ID, file:line, or file path (removes all breakpoints in that file). Comma-separated for multiple. Use all=true to remove ALL breakpoints.",
+        description = "Remove one or more breakpoints.",
         toolAnnotations = ToolAnnotations(
             readOnlyHint = false,
             destructiveHint = true,

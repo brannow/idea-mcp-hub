@@ -80,11 +80,9 @@ fun Server.registerDebugTools(project: Project) {
     // --- debug_variable_detail ---
     addTool(
         name = "debug_variable_detail",
-        description = "Expand variables to see their properties/children. Requires a paused debug session. " +
-                "Omit path to expand all top-level variables. " +
-                "Use dot-path notation to drill into nested structures: \$engine, \$engine.pattern, \$items.0.name. " +
-                "Short property names work for inherited properties (e.g. 'parent' matches '*AstNode*parent'). " +
-                "Circular object references are detected and marked automatically.",
+        description = "Expand a variable's properties and nested children. " +
+                "Use when debug_snapshot shows a type preview like {User} or array(5) that you need to see inside. " +
+                "Requires a paused session.",
         toolAnnotations = readOnlyAnnotations,
         inputSchema = ToolSchema(
             properties = buildJsonObject {
@@ -154,8 +152,8 @@ fun Server.registerDebugTools(project: Project) {
     // --- debug_inspect_frame ---
     addTool(
         name = "debug_inspect_frame",
-        description = "Switch inspection to a different stack frame. Like clicking a row in the stacktrace panel. " +
-                "Shows source context and variables at that frame's scope. Requires a paused debug session.",
+        description = "View source and variables at a different call stack depth. " +
+                "Use frame indices from debug_snapshot's stacktrace. Requires a paused session.",
         toolAnnotations = readOnlyAnnotations,
         inputSchema = ToolSchema(
             properties = buildJsonObject {
@@ -243,12 +241,80 @@ fun Server.registerDebugTools(project: Project) {
         }
     }
 
+    // --- debug_evaluate ---
+    addTool(
+        name = "debug_evaluate",
+        description = "Evaluate a PHP expression in the current debug scope — " +
+                "test ideas, call methods, or modify variables. Requires a paused session.",
+        toolAnnotations = ToolAnnotations(
+            readOnlyHint = false,
+            destructiveHint = false,
+            idempotentHint = false,
+            openWorldHint = true,
+        ),
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                putJsonObject("expression") {
+                    put("type", "string")
+                    put("description", "PHP expression to evaluate. Examples: " +
+                            "\"count(\$items)\", \"\$user->getName()\", " +
+                            "\"\$this->repository->findAll()\", \"array_keys(\$config)\"")
+                }
+                putJsonObject("depth") {
+                    put("type", "integer")
+                    put("description", "Expansion depth for object/array results. Default: 1 (shows immediate properties). " +
+                            "Use 0 for just type and value, 2+ for deeper nesting.")
+                }
+                putJsonObject("session_id") {
+                    put("type", "string")
+                    put("description", "ID of the debug session (from session_list). Omit to use the active session.")
+                }
+            },
+            required = listOf("expression")
+        )
+    ) { request ->
+        activityLog.log("debug_evaluate")
+        try {
+            val expression = request.arguments?.get("expression")?.jsonPrimitive?.content
+                ?: return@addTool err("Missing required parameter: expression")
+            val depth = request.arguments?.get("depth")?.jsonPrimitive?.intOrNull ?: 1
+            val sessionId = request.arguments?.get("session_id")?.jsonPrimitive?.content
+            val (session, error) = resolvePausedSession(project, sessionId)
+            if (error != null) return@addTool error
+
+            val suspendContext = session!!.suspendContext
+                ?: return@addTool err("No suspend context — session may be between steps")
+            val stack = suspendContext.activeExecutionStack
+                ?: return@addTool err("No execution stack available")
+            val frame = stack.topFrame
+                ?: return@addTool err("No stack frame available")
+
+            // Position context (best-effort)
+            val sourceHeader = try {
+                extractSourceContext(session, sourceService)?.let { formatSourceHeader(it) }
+            } catch (_: Exception) { null }
+
+            val node = try {
+                variableService.evaluateExpression(frame, expression, depth)
+            } catch (e: EvaluationException) {
+                val prefix = if (sourceHeader != null) "at $sourceHeader\n\n" else ""
+                val msg = (e.message ?: "Unknown error")
+                    .removePrefix("error evaluating code: ")
+                    .removePrefix("Error evaluating code: ")
+                return@addTool err("$prefix$msg")
+            }
+
+            ok(formatEvaluationResult(expression, node, sourceHeader))
+        } catch (e: Exception) {
+            err(e.message ?: "Unknown error")
+        }
+    }
+
     // --- debug_snapshot ---
     addTool(
         name = "debug_snapshot",
-        description = "Get the current debug state. Requires a paused debug session. " +
-                "Returns session info, source context (±5 lines around current position), top-level variables, and call stack. " +
-                "Use 'include' to request only specific parts for token efficiency.",
+        description = "Get the current debug state: position, source code, variables, and call stack. " +
+                "Use debug_variable_detail to expand variables shown as previews. Requires a paused session.",
         toolAnnotations = readOnlyAnnotations,
         inputSchema = ToolSchema(
             properties = buildJsonObject {

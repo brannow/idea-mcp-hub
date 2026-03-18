@@ -1,6 +1,7 @@
 package com.github.brannow.phpstormmcp.tools
 
 import com.intellij.openapi.project.Project
+import com.intellij.xdebugger.evaluation.XDebuggerEvaluator
 import com.intellij.xdebugger.frame.XStackFrame
 import com.intellij.xdebugger.frame.XValue
 import com.intellij.xdebugger.frame.XValueContainer
@@ -277,6 +278,10 @@ class VariableServiceTest {
                     ?: return VariableService.VariablePresentation(null, "", false)
                 return VariableService.VariablePresentation(mockVar.type, mockVar.value, mockVar.hasChildren)
             }
+
+            override fun evaluate(evaluator: XDebuggerEvaluator, expression: String): XValue {
+                throw UnsupportedOperationException("Not used in detail tests")
+            }
         }
         return service
     }
@@ -308,6 +313,121 @@ class VariableServiceTest {
             private fun presentationForNext(): VariableService.VariablePresentation {
                 val v = case.variables[presentationIdx++]
                 return VariableService.VariablePresentation(v.type, v.value, v.hasChildren)
+            }
+
+            override fun evaluate(evaluator: XDebuggerEvaluator, expression: String): XValue {
+                throw UnsupportedOperationException("Not used in variable tests")
+            }
+        }
+        return service
+    }
+
+    // --- evaluateExpression tests ---
+
+    @Test
+    fun `evaluateExpression — scalar result`() {
+        val resultXValue = mockk<XValue>()
+        val service = buildEvalService(resultXValue, MockVar("int", "42"))
+        val evaluator = mockk<XDebuggerEvaluator>()
+        val frame = mockk<XStackFrame>()
+        every { frame.evaluator } returns evaluator
+
+        val result = service.evaluateExpression(frame, "count(\$items)", 0)
+        assertEquals(VariableNode("(eval)", "int", "42", false), result)
+    }
+
+    @Test
+    fun `evaluateExpression — object with depth`() {
+        val resultXValue = mockk<XValue>()
+        val service = buildEvalService(
+            resultXValue,
+            MockVar("App\\User", "", hasChildren = true, children = mapOf(
+                "name" to MockVar("string", "\"John\""),
+                "age" to MockVar("int", "30"),
+            ))
+        )
+        val evaluator = mockk<XDebuggerEvaluator>()
+        val frame = mockk<XStackFrame>()
+        every { frame.evaluator } returns evaluator
+
+        val result = service.evaluateExpression(frame, "\$user", 1)
+        assertEquals(
+            VariableNode("(eval)", "App\\User", "", true, children = listOf(
+                VariableNode("name", "string", "\"John\"", false),
+                VariableNode("age", "int", "30", false),
+            )),
+            result
+        )
+    }
+
+    @Test
+    fun `evaluateExpression — no evaluator throws`() {
+        val project = mockk<Project>()
+        every { project.basePath } returns "/project"
+        val service = VariableService(project)
+        val frame = mockk<XStackFrame>()
+        every { frame.evaluator } returns null
+
+        val ex = assertThrows(EvaluationException::class.java) {
+            service.evaluateExpression(frame, "1 + 1")
+        }
+        assertEquals("Evaluation not supported in this frame", ex.message)
+    }
+
+    @Test
+    fun `evaluateExpression — evaluation error propagates`() {
+        val project = mockk<Project>()
+        every { project.basePath } returns "/project"
+        val service = VariableService(project)
+        service.platform = object : VariableService.Platform {
+            override fun computeChildren(container: XValueContainer) = emptyList<Pair<String, XValue>>()
+            override fun computePresentation(value: XValue) =
+                VariableService.VariablePresentation(null, "", false)
+            override fun evaluate(evaluator: XDebuggerEvaluator, expression: String): XValue {
+                throw EvaluationException("Undefined variable \$foo")
+            }
+        }
+        val evaluator = mockk<XDebuggerEvaluator>()
+        val frame = mockk<XStackFrame>()
+        every { frame.evaluator } returns evaluator
+
+        val ex = assertThrows(EvaluationException::class.java) {
+            service.evaluateExpression(frame, "\$foo")
+        }
+        assertEquals("Undefined variable \$foo", ex.message)
+    }
+
+    private fun buildEvalService(resultXValue: XValue, resultMock: MockVar): VariableService {
+        val project = mockk<Project>()
+        every { project.basePath } returns "/project"
+
+        val valueMap = mutableMapOf<XValue, MockVar>()
+        valueMap[resultXValue] = resultMock
+
+        fun createXValues(vars: Map<String, MockVar>): List<Pair<String, XValue>> {
+            return vars.map { (name, mockVar) ->
+                val xValue = mockk<XValue>()
+                valueMap[xValue] = mockVar
+                name to xValue
+            }
+        }
+
+        val service = VariableService(project)
+        service.platform = object : VariableService.Platform {
+            override fun computeChildren(container: XValueContainer): List<Pair<String, XValue>> {
+                val mockVar = valueMap[container as? XValue] ?: return emptyList()
+                val children = mockVar.children ?: return emptyList()
+                return createXValues(children)
+            }
+
+            override fun computePresentation(value: XValue): VariableService.VariablePresentation {
+                val mockVar = valueMap[value]
+                    ?: return VariableService.VariablePresentation(null, "", false)
+                return VariableService.VariablePresentation(mockVar.type, mockVar.value, mockVar.hasChildren)
+            }
+
+            override fun evaluate(evaluator: XDebuggerEvaluator, expression: String): XValue {
+                return resultXValue
             }
         }
         return service

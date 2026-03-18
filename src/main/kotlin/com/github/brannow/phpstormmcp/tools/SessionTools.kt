@@ -52,7 +52,7 @@ fun Server.registerSessionTools(project: Project) {
     // --- session_list ---
     addTool(
         name = "session_list",
-        description = "List active debug sessions with their current position and which session is active. Sessions at a breakpoint show their position, running sessions are marked [running].",
+        description = "List active debug sessions with their current position and status.",
         toolAnnotations = ToolAnnotations(
             readOnlyHint = true,
             destructiveHint = false,
@@ -75,7 +75,7 @@ fun Server.registerSessionTools(project: Project) {
     // --- session_stop ---
     addTool(
         name = "session_stop",
-        description = "Stop debug session(s). Without session_id: stops the active session (or first on the stack). Use session_id to target a specific session, or all=true to stop everything.",
+        description = "Stop one or more debug sessions.",
         toolAnnotations = ToolAnnotations(
             readOnlyHint = false,
             destructiveHint = true,

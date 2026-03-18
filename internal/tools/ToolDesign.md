@@ -169,12 +169,12 @@ Debug Snapshot:
 ├── variables:    top-level variables with type + value preview
 │                 (scalars show value, objects show class name,
 │                  arrays show count)
-└── stacktrace:   #depth name at file:line (per frame, shallowest first)
+└── stacktrace:   →#depth name at file:line (active frame marked with →)
 ```
 
 All snapshot-returning tools accept optional `include` parameter to request
 only specific parts (e.g., `include: ["source", "variables"]`).
-Session + position are always included (minimal overhead, always needed).
+Session is always included (minimal overhead, always needed).
 
 **Source context (±5 lines)**: Shows ±5 lines around the current position (respecting file boundaries), with the current line marked by `→`. Header includes FQDN class name and method/function name extracted via PHP PSI. This is orientation — the agent already has file-reading tools for full content. Simpler and more predictable than scope-aware method extraction.
 
@@ -194,9 +194,35 @@ Example source context output:
  12 }
 ```
 
-**Stack trace format**: `#depth name at file:line` per frame, shallowest first. Frame names extracted via `customizePresentation()` (not `equalityObject`, which returns null for PHP/Xdebug).
+**Stack trace format**: `#depth name at file:line` per frame, shallowest first. Active frame marked with `→` prefix. Frame names extracted via `customizePresentation()` (not `equalityObject`, which returns null for PHP/Xdebug). Library frames annotated with `(library)`.
 
-**Variable previews**: Keep it scannable. `$count = 42`, `$request = {ServerRequest}`, `$items = array(15)`, `$name = "hello world"`. The agent can use `variable_detail` to dig deeper.
+Example stack trace output:
+```
+→#0 WorldClass->fooBar() at src/WorldClass.php:22
+ #1 WorldClass->foo() at src/WorldClass.php:11
+ #2 {main}() at src/index.php:8
+```
+
+**Variable previews**: Keep it scannable. `$count = {int} 42`, `$request = {ServerRequest}`, `$items = array(3)`, `$name = {string} "hello"`, `$foo = {null} null`. The agent can use `debug_variable_detail` to dig deeper.
+
+Example full snapshot output:
+```
+#12345 "index.php" at src/WorldClass.php:22 (active)
+
+\Brannow\Sandbox\WorldClass::fooBar() — src/WorldClass.php:22
+
+ 20         $engine = new TypedPatternEngine();
+ 21         $result = $engine->match('PAGE55');
+→22         return $bar;
+
+$this = {Brannow\Sandbox\WorldClass}
+$foo = {string} "foo"
+$bar = {string} "foo-bar"
+
+→#0 WorldClass->fooBar() at src/WorldClass.php:22
+ #1 WorldClass->foo() at src/WorldClass.php:11
+ #2 {main}() at src/index.php:8
+```
 
 ---
 
@@ -207,9 +233,9 @@ Example source context output:
 These work independently of debug sessions — breakpoints exist in the project regardless of whether debugging is active.
 
 #### `breakpoint_list`
-List all breakpoints in the project. Same-line breakpoints are auto-grouped with `(multi-breakpoint-line)` hint.
+List all breakpoints with their locations, conditions, and status. Same-line breakpoints are auto-grouped with `(multi-breakpoint-line)` hint.
 
-**Input**: `file` (optional) — filter by file path substring
+**Input**: `file` (optional, string) — filter by file path substring
 **Output**:
 ```
 #2 src/index.php:5
@@ -224,9 +250,10 @@ Or: `No breakpoints in project`
 Or: `No breakpoints in src/Foo.php`
 Or: `File 'src/nonExistent' not found` (when the file doesn't exist at all)
 
-**Annotations** (only non-default state is shown):
+**Annotations** (only non-default state is shown, order: active → method → vendor → disabled → condition → log → no suspend):
+- `active` — breakpoint at the current execution position
 - `method` — method breakpoint (vs line breakpoint)
-- `library` — breakpoint is in a library/vendor path (detected via `ProjectFileIndex.isInLibrary()`, not string matching)
+- `vendor` — breakpoint is in a library/vendor path (detected via `ProjectFileIndex.isInLibrary()`, not string matching)
 - `disabled` — breakpoint is not enabled
 - `condition: expr` — has a condition expression
 - `log: expr` — has a log expression
@@ -235,13 +262,13 @@ Or: `File 'src/nonExistent' not found` (when the file doesn't exist at all)
 ---
 
 #### `breakpoint_add`
-Add a line breakpoint.
+Add a line breakpoint at a file:line location.
 
 **Input**:
-- `location` (required) — file:line, e.g. `src/index.php:15`
-- `condition` (optional) — PHP expression, e.g. `$count > 10`
-- `log_expression` (optional) — expression to evaluate and log when hit
-- `suspend` (optional, default true) — whether to pause execution
+- `location` (required, string) — file:line, e.g. `src/index.php:15`
+- `condition` (optional, string) — PHP expression that must be true for the breakpoint to trigger, e.g. `$count > 10`
+- `log_expression` (optional, string) — PHP expression to evaluate and log when the breakpoint is hit, e.g. `$request->getUri()`
+- `suspend` (optional, boolean, default true) — whether to pause execution. Set to false for logging-only breakpoints.
 
 **Validation**:
 - Line must be >= 1 (negative and zero are rejected at parse level)
@@ -262,14 +289,14 @@ src/WorldClass.php:13 (multi-breakpoint-line)
 ---
 
 #### `breakpoint_update`
-Modify an existing breakpoint.
+Modify an existing breakpoint. Only provided fields are changed.
 
 **Input**:
-- `id` (required) — breakpoint #ID or file:line reference (accepts `#` prefix)
-- `enabled` (optional) — true/false
-- `condition` (optional) — new condition (empty string to remove)
-- `log_expression` (optional) — new log expression
-- `suspend` (optional) — true/false
+- `id` (required, string) — breakpoint #ID or file:line reference (accepts `#` prefix)
+- `enabled` (optional, boolean) — true/false
+- `condition` (optional, string) — new condition (empty string to remove)
+- `log_expression` (optional, string) — new log expression (empty string to remove)
+- `suspend` (optional, boolean) — true/false
 
 **Validation order**: ID is validated first — if the ID is wrong, the agent gets the not-found error with current breakpoints, regardless of whether change params were provided. Only if the ID is valid does the "no changes specified" check apply. This ensures the agent always gets the most actionable error first.
 
@@ -281,11 +308,11 @@ Modify an existing breakpoint.
 ---
 
 #### `breakpoint_remove`
-Remove breakpoint(s). Requires explicit targets — no silent "remove all".
+Remove one or more breakpoints. Requires explicit targets — no silent "remove all".
 
 **Input**:
-- `id` (optional) — #ID, file:line, file path, or file substring. Comma-separated for multiple. Accepts `#` prefix. All formats can be mixed in one call.
-- `all` (optional) — set to `true` to remove ALL breakpoints in the project
+- `id` (optional, string) — #ID, file:line, file path, or file substring. Comma-separated for multiple. Accepts `#` prefix. All formats can be mixed in one call.
+- `all` (optional, boolean) — set to `true` to remove ALL breakpoints in the project
 
 **Output**: Lists removed breakpoints (full detail) + remaining count (compact index):
 ```
@@ -305,7 +332,7 @@ Remove breakpoint(s). Requires explicit targets — no silent "remove all".
 ### 2. Session Management
 
 #### `session_list`
-List active debug sessions.
+List active debug sessions with their current position and status. Stopped sessions are excluded.
 
 **Input**: (none)
 **Output**:
@@ -318,13 +345,13 @@ Or: `No sessions in project`
 ---
 
 #### `session_stop`
-Stop debug session(s).
+Stop one or more debug sessions.
 
 **Input**:
-- `session_id` (optional) — ID of session (with or without `#` prefix). If omitted → stops the active session (or first on the stack).
-- `all` (optional) — true to stop all sessions
+- `session_id` (optional, string) — ID of session (with or without `#` prefix). If omitted → stops the active session (or first on the stack).
+- `all` (optional, boolean) — true to stop all sessions
 
-**Output**: Stopped session in `#ID "name" at file:line` notation. If other sessions remain, lists them with count.
+**Output**: Stopped session in `#ID "name" [stopped] at file:line` notation. If other sessions remain, lists them with count.
 **Not found (specific ID)**: Error — shows the requested ID + list of active sessions.
 **No sessions (no ID or all=true)**: `No sessions in project` — this is `ok`, not an error. Stopping nothing is a no-op, not a failure. Only specifying a non-existent ID is an error.
 
@@ -332,84 +359,90 @@ Stop debug session(s).
 
 ### 3. Navigation / Control
 
-All navigation tools:
+All navigation tools require a paused debug session and:
 - Accept optional `session_id` (defaults to active session)
+- Accept optional `include` to filter the snapshot (default: full snapshot)
+- Accept optional `globals` to include PHP superglobals in variables (default: false)
 - Return a **Debug Snapshot** after the action completes
-- Are async: they trigger the action, wait for the debugger to pause again, then return the snapshot
+- Are async: they trigger the action, register a temporary `XDebugSessionListener`, wait for `sessionPaused()` or `sessionStopped()`, then return the snapshot
 
-#### `debug_continue`
-Resume execution until next breakpoint or end.
+**Session resolution errors** (shared across all debug tools):
+- `No active debug session` — no session exists
+- `Session '#ID' not found` — specific session_id doesn't match
+- `Session has ended` — session is stopped
+- `Session is running — not paused at a breakpoint` — session is executing, can't step
 
-**Input**: optional `session_id`, optional `include`
-**Output**: Debug Snapshot (at next breakpoint) or session-ended status
+#### `debug_step`
+Step through code. Consolidates all stepping actions into one tool — they're identical except for the session method call.
 
----
+**Input**:
+- `action` (required, string enum) — the stepping action:
+  - `"over"` — execute current line, stop at next line in same scope
+  - `"into"` — step into the function call on current line
+  - `"out"` — run until current function returns, stop in caller
+  - `"continue"` — resume execution until next breakpoint or end
+- `session_id` (optional, string) — debug session ID. Omit to use the active session.
+- `include` (optional, string array) — snapshot parts: `"source"`, `"variables"`, `"stacktrace"`. Omit for full snapshot.
+- `globals` (optional, boolean, default false) — include PHP superglobals in variables
 
-#### `debug_step_over`
-Execute current line, stop at next line in same scope.
+**Output**: Debug Snapshot (at the new position after stepping) or `Session ended` if the program finished.
 
-**Input**: optional `session_id`, optional `include`
-**Output**: Debug Snapshot
-
----
-
-#### `debug_step_into`
-Step into the function call on current line.
-
-**Input**: optional `session_id`, optional `include`
-**Output**: Debug Snapshot
-
----
-
-#### `debug_step_out`
-Run until current function returns, stop in caller.
-
-**Input**: optional `session_id`, optional `include`
-**Output**: Debug Snapshot
+**Why one tool, not four?** Over/into/out/continue are identical in structure — same inputs, same output, same async pattern. Splitting them into four tools adds noise to the tool list without adding capability. The `action` enum is explicit enough.
 
 ---
 
 #### `debug_run_to_line`
-Continue execution until reaching a specific line (temporary breakpoint).
+Run to a specific line and return a debug snapshot. Like a temporary breakpoint — execution continues until reaching the target line.
 
 **Input**:
-- `file` (required)
-- `line` (required)
-- optional `session_id`, optional `include`
+- `location` (required, string) — target file:line, e.g. `src/index.php:15`. Accepts absolute or project-relative paths.
+- `session_id` (optional, string) — debug session ID. Omit to use the active session.
+- `include` (optional, string array) — snapshot parts: `"source"`, `"variables"`, `"stacktrace"`. Omit for full snapshot.
+- `globals` (optional, boolean, default false) — include PHP superglobals in variables
 
-**Output**: Debug Snapshot (at target line) or session-ended if line not reached
+**Output**: Debug Snapshot (at target line) or `Session ended` if the line wasn't reached.
+
+**Why separate from `debug_step`?** It has a fundamentally different input — a location parameter instead of a stepping direction. Forcing it into the `action` enum would feel unnatural.
 
 ---
 
 ### 4. Inspection
 
+All inspection tools require a paused debug session and accept optional `session_id`.
+
 #### `debug_snapshot`
 Get the current debug state without changing anything. This is the "just show me where we are" tool.
 
-**Input**: optional `session_id`, optional `include`
+**Input**:
+- `session_id` (optional, string) — debug session ID. Omit to use the active session.
+- `include` (optional, string array) — parts: `"source"`, `"variables"`, `"stacktrace"`. Omit for full snapshot.
+- `globals` (optional, boolean, default false) — include PHP superglobals in variables
+
 **Output**: Debug Snapshot
 
 ---
 
 #### `debug_inspect_frame`
-Switch inspection to a different stack frame. Like clicking a row in the stacktrace panel — shows variables and code at that frame's location.
+View source and variables at a different call stack depth. Like clicking a row in the stacktrace panel — shows variables and code at that frame's location. Uses `setCurrentStackFrame` to switch IDE context before reading the snapshot.
 
 **Input**:
-- `frame_index` (required) — 0 = current (top), 1 = caller, etc.
-- optional `session_id`, optional `include`
+- `frame_index` (required, integer) — 0 = current (top), 1 = caller, etc. Use `debug_snapshot` with `include: ["stacktrace"]` to see available frames.
+- `session_id` (optional, string) — debug session ID. Omit to use the active session.
+- `include` (optional, string array) — snapshot parts: `"source"`, `"variables"`, `"stacktrace"`. Omit for full snapshot.
+- `globals` (optional, boolean, default false) — include PHP superglobals in variables
 
 **Output**: Debug Snapshot (for the selected frame — source + variables at that frame's scope)
 
 ---
 
 #### `debug_variable_detail`
-Expand variables to see their properties/children. For drilling into nested objects and arrays.
+Expand a variable's properties and nested children. Use when `debug_snapshot` shows a type preview like `{User}` or `array(5)` that you need to see inside.
 
 **Input**:
-- `path` (optional) — variable path(s) using dot notation, comma-separated for multiple. Omit to expand all top-level variables. Examples: `$engine`, `$engine.pattern`, `$engine, $result`
-- `depth` (optional, default 1) — how many levels of children to expand. Use 0 for flat list (same as `debug_variables`).
-- `globals` (optional, default false) — include PHP superglobals. Only applies when no path specified.
-- optional `session_id`
+- `path` (optional, string) — variable path(s) using dot notation, comma-separated for multiple. Omit to show all top-level variables expanded. Examples: `$engine`, `$engine.pattern`, `$engine, $result`
+- `depth` (optional, integer, default 1) — how many levels of children to expand. Use 0 for just type and value without expanding children.
+- `globals` (optional, boolean, default false) — include PHP superglobals. Only applies when no path specified.
+- `session_id` (optional, string) — debug session ID. Omit to use the active session.
 
 **Path resolution**:
 - Strips `$` prefix and splits on `.`: `$engine.ast.children.0` → segments `["engine", "ast", "children", "0"]`
@@ -445,25 +478,40 @@ $engine = {CompiledPattern}
 ---
 
 #### `debug_evaluate`
-Evaluate a PHP expression in the current debug context.
+Evaluate a PHP expression in the current debug scope — test ideas, call methods, or modify variables. Not read-only: expressions can have side effects including variable assignment (`$bar = 'new value'`).
 
 **Input**:
-- `expression` (required) — PHP expression, e.g. `$request->getMethod()`, `count($items)`, `$user->getName()`
-- optional `session_id`
+- `expression` (required, string) — PHP expression. Examples: `count($items)`, `$user->getName()`, `$this->repository->findAll()`, `array_keys($config)`, `$bar = 'test'`
+- `depth` (optional, integer, default 1) — expansion depth for object/array results. Use 0 for just type and value, 2+ for deeper nesting.
+- `session_id` (optional, string) — debug session ID. Omit to use the active session.
 
-**Output**: Result with type and value (same format as variable preview, expandable via `variable_detail`)
+**Output**: Position context (best-effort) + expression result with type, expanded to specified depth:
+```
+at \App\UserService::processRequest() — src/UserService.php:42
 
----
+count($items) = {int} 3
+```
 
-#### `debug_set_value`
-Modify a variable's value at runtime.
+Object result with depth expansion:
+```
+at src/UserService.php:42
 
-**Input**:
-- `path` (required) — variable path, e.g. `$count`, `$request.method`
-- `value` (required) — new value as string (e.g. `42`, `"hello"`, `null`)
-- optional `session_id`
+$user = {App\Entity\User}
+  name = {string} "John"
+  email = {string} "john@example.com"
+  age = {int} 30
+```
 
-**Output**: Confirmation + updated Debug Snapshot
+Position header formats:
+- With class & method: `at \App\Foo::bar() — src/Foo.php:10`
+- Function only: `at doStuff() — src/helpers.php:5`
+- File only: `at src/index.php:1`
+- Library: `at \Lib\Foo::run() — vendor/lib/Foo.php:20 (library)`
+- No position available: header omitted
+
+**Error**: Returns the raw Xdebug error message — no wrapper noise.
+
+**Why `debug_set_value` was dropped**: `debug_evaluate` already handles assignments (`$bar = 'test'`, `$this->name = 'new'`). The `XValueModifier` API had callback/timeout issues, and a separate tool adds complexity with zero capability gain.
 
 ---
 
@@ -471,11 +519,11 @@ Modify a variable's value at runtime.
 
 | Category | Tools | Count |
 |---|---|---|
-| Breakpoints | list, add, update, remove | 4 |
-| Sessions | list, stop | 2 |
-| Navigation | continue, step_over, step_into, step_out, run_to_line | 5 |
-| Inspection | snapshot, inspect_frame, variable_detail, evaluate, set_value | 5 |
-| **Total** | | **16** |
+| Breakpoints | `breakpoint_list`, `breakpoint_add`, `breakpoint_update`, `breakpoint_remove` | 4 |
+| Sessions | `session_list`, `session_stop` | 2 |
+| Navigation | `debug_step` (over/into/out/continue), `debug_run_to_line` | 2 |
+| Inspection | `debug_snapshot`, `debug_inspect_frame`, `debug_variable_detail`, `debug_evaluate` | 4 |
+| **Total** | | **12** |
 
 ---
 
@@ -486,7 +534,7 @@ Every tool declares MCP `ToolAnnotations` to signal its behavior to the client. 
 **Key decisions:**
 
 - **`idempotentHint` is always `false`** — The agent shares IDE state with a human user. Between two identical calls, the user may have changed breakpoints, stepped through code, or stopped sessions. No call is guaranteed to be a no-op on repeat.
-- **`openWorldHint` is always `false`** — All tools interact with PhpStorm's internal state, not external services.
+- **`openWorldHint`** — `false` for all tools except `debug_evaluate`. Evaluate is `true` because expressions execute PHP code via Xdebug, which can call methods, access databases, make HTTP requests, or trigger any other side effect the PHP application's code path allows.
 - **`readOnlyHint`** — `true` only for list/inspection tools that don't modify state.
 - **`destructiveHint`** — `true` for tools that remove or terminate things (breakpoint_remove, session_stop). `false` for tools that add or modify.
 
@@ -498,8 +546,12 @@ Every tool declares MCP `ToolAnnotations` to signal its behavior to the client. 
 | `breakpoint_remove` | false | true | false | false |
 | `session_list` | true | false | false | false |
 | `session_stop` | false | true | false | false |
-| `debug_variable_detail` | true | false | false | false |
 | `debug_snapshot` | true | false | false | false |
+| `debug_variable_detail` | true | false | false | false |
+| `debug_inspect_frame` | true | false | false | false |
+| `debug_evaluate` | false | false | false | **true** |
+| `debug_step` | false | false | false | false |
+| `debug_run_to_line` | false | false | false | false |
 
 ---
 
@@ -507,14 +559,9 @@ Every tool declares MCP `ToolAnnotations` to signal its behavior to the client. 
 
 PhpStorm maintains an **active session** — the one currently selected in the debug tab. All session-scoped tools default to the active session (or first on the stack if no active session):
 
-- **0 sessions**: `No sessions in project` (ok for implicit stop, error for explicit ID)
+- **0 sessions**: `No active debug session` (error for debug tools), `No sessions in project` (ok for implicit stop)
 - **1 session**: That session is always active
 - **N sessions**: The active session is used by default. Agent can switch by passing a different `session_id`.
-
-The snapshot always includes which session is active:
-```
-session: { id: "abc", name: "index.php", active: true }
-```
 
 `session_list` marks which session is active. The agent only needs to think about session IDs when it wants to work with a non-active session.
 
@@ -528,7 +575,7 @@ include: ["source", "variables"]    → source + variables, no stacktrace
 include: ["stacktrace"]             → only the stack
 ```
 
-**Default (no `include`)**: full snapshot (position + source + variables + stacktrace).
+**Default (no `include` or empty `include`)**: full snapshot (session + source + variables + stacktrace).
 
 This matters for token efficiency — if the agent is stepping through 10 lines, it probably doesn't need the full stacktrace every time. Just `include: ["source", "variables"]` to see what changed.
 
@@ -544,13 +591,16 @@ This matters for token efficiency — if the agent is stepping through 10 lines,
 
 ## Implementation Notes
 
-- Navigation tools are **async by nature**: they trigger an action in PhpStorm, then wait for the debugger to pause. The MCP response returns only when paused (or timed out / session ended).
+- Navigation tools are **async by nature**: they trigger an action in PhpStorm, register a temporary `XDebugSessionListener`, then block via `CompletableFuture.get()` until `sessionPaused()` or `sessionStopped()` fires. The MCP response returns only when the debugger pauses or the session ends.
 - All tools run their IDE operations on EDT (Event Dispatch Thread) as required by IntelliJ, but the MCP request handling itself is on a background thread.
-- Variable preview generation should be smart: truncate long strings, limit array previews, show class names for objects.
-- **Library detection** uses `ProjectFileIndex.isInLibrary()` — the platform API that respects the project's actual library root configuration, not string matching on path names like `vendor/`.
+- Variable preview generation is smart: type + value for scalars (`{int} 42`, `{string} "hello"`), class name for objects (`{ServerRequest}`), count for arrays (`array(15)`), `{null} null` for nulls, `(unknown)` as fallback.
+- **Library detection** uses `ProjectFileIndex.isInLibrary()` — the platform API that respects the project's actual library root configuration, not string matching on path names like `vendor/`. Annotated as `(library)` in source context and stack frames, `(vendor)` in breakpoint annotations.
 - **Line validation** on `breakpoint_add` uses `FileDocumentManager` to get the actual line count and reject out-of-bounds lines. PhpStorm's internal `XBreakpointManager.addLineBreakpoint()` doesn't validate this (we bypass the GUI guards), so the tool must do it.
 - **ReadAction threading**: All IntelliJ model reads (Document, PSI, XBreakpointManager, XDebuggerManager) must be wrapped in `ReadAction.compute()`. Every service routes this through a `Platform.readAction()` method — real implementations call `ReadAction.compute()`, test mocks pass through directly. Without this, random threading violations crash the MCP request handler.
 - **PHP PSI dependency**: Source context uses `com.jetbrains.php.lang.psi.elements.Method`, `Function`, `PhpClass` for class/method name extraction. Requires `bundledPlugin("com.jetbrains.php")` in build.gradle.kts and `<depends>com.jetbrains.php</depends>` in plugin.xml.
 - **Xdebug inherited property naming**: Xdebug exposes inherited private/protected properties with the `*FullyQualified\ClassName*propertyName` convention. Path resolution matches short names against these (e.g., `parent` matches `*TypedPatternEngine\Nodes\AstNode*parent`). When ambiguous (multiple classes define the same property name), the agent must use the full `*ClassName*prop` form.
 - **Circular reference detection**: `XValue` has no accessible object identity (no Xdebug handle/address through the public API), and each `computeChildren()` call creates fresh `XValue` wrappers, so Java object identity doesn't work. Instead, object types (FQCNs) are tracked along the expansion ancestor chain. Arrays are excluded (type `"array"` nests legitimately). This is a heuristic — false positives exist for legitimately nested same-type objects, but are rare in practice. Explicit path navigation always bypasses cycle detection since `getVariableDetail` resolves the path first, then calls `expandValue` with a fresh ancestor set.
 - **PHP superglobals**: `$_ENV`, `$_SERVER`, `$_GET`, `$_POST`, `$_SESSION`, `$_COOKIE`, `$_FILES`, `$_REQUEST`, `$GLOBALS` are filtered by default in variable output. They're noisy (dozens of entries) and rarely relevant during debugging. Opt-in via `globals: true`.
+- **Breakpoint IDs**: Numeric, derived from `XBreakpoint.timeStamp`. Displayed with `#` prefix in output, accepted with or without `#` in input.
+- **Session IDs**: Derived from `System.identityHashCode(session)`. Accepted with or without `#` prefix.
+- **Frame navigation**: `debug_inspect_frame` invokes `setCurrentStackFrame` on the IDE before reading the snapshot, which switches the Variables panel context — same as clicking a row in the debugger's Frames panel.
