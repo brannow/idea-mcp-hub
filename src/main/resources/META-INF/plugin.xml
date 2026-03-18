@@ -3,6 +3,13 @@
     <name>MCP Hub</name>
     <vendor url="https://github.com/brannow/idea-mcp-hub">Benjamin Rannow</vendor>
     <change-notes><![CDATA[
+        <b>0.3.0</b>
+        <ul>
+            <li>New tool: debug_console — read stdout/stderr from the debug session's console (useful for Docker/remote PHP processes)</li>
+            <li>Fix: stopping a session now auto-activates the next alive session instead of leaving a dead tab focused</li>
+            <li>Smarter session errors: when the active session ends but other sessions exist, the error lists them with guidance to use session_activate</li>
+            <li>Cleaner session switch alert messages</li>
+        </ul>
         <b>0.2.1</b>
         <ul>
             <li>Show plugin version in tool window status line</li>
@@ -34,7 +41,7 @@
         They can't set breakpoints, step through code, or inspect variables.
         MCP Hub exposes these IDE-only capabilities as MCP tools.</p>
 
-        <h3>13 tools across 4 categories</h3>
+        <h3>14 tools across 4 categories</h3>
 
         <b>Breakpoints</b> (work without an active debug session)
         <ul>
@@ -61,6 +68,7 @@
             <li>Expand variables to any depth (circular references detected)</li>
             <li>Switch stack frames and inspect variables at that scope</li>
             <li>Evaluate PHP expressions with side effects ($bar = 'new value')</li>
+            <li>Read console output (stdout/stderr) — works with Docker/remote processes</li>
         </ul>
 
         <h3>Setup</h3>

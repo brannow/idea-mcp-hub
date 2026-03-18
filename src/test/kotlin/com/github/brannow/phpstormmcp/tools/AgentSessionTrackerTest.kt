@@ -40,17 +40,17 @@ class AgentSessionTrackerTest {
     @Test
     fun `session switched - previous paused`() {
         AgentSessionTracker.trackById("111")
-        val result = AgentSessionTracker.checkSessionSwitch("222", "test.php") { "paused, now inactive" }
+        val result = AgentSessionTracker.checkSessionSwitch("222", "test.php") { "paused, inactive" }
         assertNotNull(result)
-        assertTrue(result!!.contains("#111 (paused, now inactive)"))
+        assertTrue(result!!.contains("#111 (paused, inactive)"))
     }
 
     @Test
     fun `session switched - previous running`() {
         AgentSessionTracker.trackById("111")
-        val result = AgentSessionTracker.checkSessionSwitch("222", "test.php") { "running, now inactive" }
+        val result = AgentSessionTracker.checkSessionSwitch("222", "test.php") { "running, inactive" }
         assertNotNull(result)
-        assertTrue(result!!.contains("#111 (running, now inactive)"))
+        assertTrue(result!!.contains("#111 (running, inactive)"))
     }
 
     // --- trackById / clear ---
@@ -95,12 +95,12 @@ class AgentSessionTrackerTest {
     fun `activate after unexpected switch resolves the conflict`() {
         AgentSessionTracker.trackById("111")
         // Session switches unexpectedly
-        val error = AgentSessionTracker.checkSessionSwitch("222", "test.php") { "paused, now inactive" }
+        val error = AgentSessionTracker.checkSessionSwitch("222", "test.php") { "paused, inactive" }
         assertNotNull(error)
         // Agent calls session_activate to confirm
         AgentSessionTracker.trackById("222")
         // Now it works
-        val result = AgentSessionTracker.checkSessionSwitch("222", "test.php") { "paused, now inactive" }
+        val result = AgentSessionTracker.checkSessionSwitch("222", "test.php") { "paused, inactive" }
         assertNull(result)
     }
 }

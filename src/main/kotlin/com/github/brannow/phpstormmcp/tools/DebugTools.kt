@@ -1,6 +1,10 @@
 package com.github.brannow.phpstormmcp.tools
 
 import com.github.brannow.phpstormmcp.statusbar.McpActivityLog
+import com.intellij.execution.console.ConsoleViewWrapperBase
+import com.intellij.execution.console.DuplexConsoleView
+import com.intellij.execution.impl.ConsoleViewImpl
+import com.intellij.execution.ui.ConsoleView
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.xdebugger.XDebugSession
@@ -42,7 +46,7 @@ internal object AgentSessionTracker {
      * @param currentSessionId the ID of the current active session
      * @param currentSessionName the name of the current active session
      * @param previousSessionStatus a lambda that resolves the status of the previous session:
-     *        "terminated", "paused, now inactive", or "running, now inactive"
+     *        "terminated", "paused, inactive", or "running, inactive"
      */
     fun checkSessionSwitch(
         currentSessionId: String,
@@ -54,28 +58,29 @@ internal object AgentSessionTracker {
 
         val status = previousSessionStatus(lastId)
         return "Active session changed unexpectedly.\n" +
-            "Previous session #$lastId ($status).\n" +
-            "Now on #$currentSessionId \"$currentSessionName\".\n\n" +
+            "Previous: #$lastId ($status).\n" +
+            "Active: #$currentSessionId \"$currentSessionName\".\n\n" +
             "Use session_activate to confirm the switch, or session_list to see all sessions."
     }
 }
 
 /**
- * Resolve the active paused debug session, or return an error result.
- * Always uses the current (active) session. Use session_activate to switch sessions.
- *
- * If the active session changed externally (user switched tabs), blocks with an alert
- * and requires the agent to call session_activate or session_list to re-orient.
+ * Resolve the active debug session (must not be stopped, but can be running or paused).
+ * Includes session switch detection.
  */
-internal fun resolvePausedSession(project: Project): Pair<XDebugSession?, CallToolResult?> {
+internal fun resolveActiveSession(project: Project): Pair<XDebugSession?, CallToolResult?> {
     val manager = XDebuggerManager.getInstance(project)
-    val session = manager.currentSession ?: return null to err("No active debug session")
+    val sessionService = SessionService.getInstance(project)
+    val session = manager.currentSession
 
-    if (session.isStopped) {
+    if (session == null || session.isStopped) {
         AgentSessionTracker.clear()
-        return null to err("Session has ended")
+        val alive = sessionService.listSessions()
+        if (alive.isEmpty()) {
+            return null to err("No debug session")
+        }
+        return null to err("Session ended. Other sessions:\n\n${formatSessionList(alive)}\n\nUse session_activate to switch.")
     }
-    if (!session.isSuspended) return null to err("Session is running — not paused at a breakpoint")
 
     // Check for unexpected session switch
     val currentId = System.identityHashCode(session).toString()
@@ -89,13 +94,27 @@ internal fun resolvePausedSession(project: Project): Pair<XDebugSession?, CallTo
         when {
             previousSession == null -> "terminated"
             previousSession.isStopped -> "terminated"
-            previousSession.isSuspended -> "paused, now inactive"
-            else -> "running, now inactive"
+            previousSession.isSuspended -> "paused, inactive"
+            else -> "running, inactive"
         }
     }
     if (switchError != null) return null to err(switchError)
 
     AgentSessionTracker.track(session)
+    return session to null
+}
+
+/**
+ * Resolve the active paused debug session, or return an error result.
+ * Always uses the current (active) session. Use session_activate to switch sessions.
+ *
+ * If the active session changed externally (user switched tabs), blocks with an alert
+ * and requires the agent to call session_activate or session_list to re-orient.
+ */
+internal fun resolvePausedSession(project: Project): Pair<XDebugSession?, CallToolResult?> {
+    val (session, error) = resolveActiveSession(project)
+    if (error != null) return null to error
+    if (!session!!.isSuspended) return null to err("Session is running — not paused at a breakpoint")
     return session to null
 }
 
@@ -127,6 +146,22 @@ internal fun extractVariables(
     val stack = suspendContext.activeExecutionStack ?: return null
     val frame = stack.topFrame ?: return null
     return variableService.getVariables(frame)
+}
+
+/**
+ * Recursively unwrap a ConsoleView to find the underlying ConsoleViewImpl.
+ * Handles DuplexConsoleView (PHP debug uses this) and ConsoleViewWrapperBase.
+ */
+internal fun findConsoleViewImpl(view: ConsoleView?): ConsoleViewImpl? {
+    return when (view) {
+        is ConsoleViewImpl -> view
+        is DuplexConsoleView<*, *> -> {
+            findConsoleViewImpl(view.primaryConsoleView as? ConsoleView)
+                ?: findConsoleViewImpl(view.secondaryConsoleView as? ConsoleView)
+        }
+        is ConsoleViewWrapperBase -> findConsoleViewImpl(view.delegate)
+        else -> null
+    }
 }
 
 private val readOnlyAnnotations = ToolAnnotations(
@@ -417,6 +452,52 @@ fun Server.registerDebugTools(project: Project) {
             val frames = if (includeStack) extractStackFrames(session!!, stackFrameService) else null
 
             ok(formatSnapshot(sessionInfo, source, variables, frames))
+        } catch (e: Exception) {
+            err(e.message ?: "Unknown error")
+        }
+    }
+
+    // --- debug_console ---
+    addTool(
+        name = "debug_console",
+        description = "Read the debug session's console output (stdout/stderr). " +
+                "Useful when the PHP process runs in Docker or a remote environment where the agent can't see stdout directly.",
+        toolAnnotations = readOnlyAnnotations,
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                putJsonObject("tail") {
+                    put("type", "integer")
+                    put("description", "Return only the last N lines. Default: 0 (all output).")
+                }
+            },
+            required = emptyList()
+        )
+    ) { request ->
+        activityLog.log("debug_console")
+        try {
+            val tail = request.arguments?.get("tail")?.jsonPrimitive?.intOrNull ?: 0
+            val (session, error) = resolveActiveSession(project)
+            if (error != null) return@addTool error
+
+            val consoleImpl = findConsoleViewImpl(session!!.consoleView as? ConsoleView)
+                ?: return@addTool err("Console not available")
+
+            // flushDeferredText ensures pending output is written to the editor
+            ApplicationManager.getApplication().invokeAndWait {
+                consoleImpl.flushDeferredText()
+            }
+
+            val text = consoleImpl.editor?.document?.text ?: ""
+            if (text.isBlank()) return@addTool ok("(empty)")
+
+            val output = if (tail > 0) {
+                val lines = text.lines()
+                lines.takeLast(tail).joinToString("\n")
+            } else {
+                text
+            }
+
+            ok(output)
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }

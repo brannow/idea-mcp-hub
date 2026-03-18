@@ -92,6 +92,19 @@ class SessionService(private val project: Project) {
             session to toSessionInfo(session, manager.currentSession)
         }
         platform.runOnEdt { session.stop() }
+
+        // Activate the next alive session so the dead tab doesn't stay focused
+        platform.readAction {
+            platform.getDebuggerManager().debugSessions
+                .firstOrNull { !it.isStopped && it !== session }
+        }?.let { nextSession ->
+            platform.runOnEdt {
+                if (nextSession is XDebugSessionImpl) {
+                    nextSession.activateSession(false)
+                }
+            }
+        }
+
         return info.copy(status = "stopped", active = false)
     }
 

@@ -91,11 +91,11 @@ class SessionToolsTest {
                 mockSessions.entries.first { it.value === session }.key.id
             override fun <T> readAction(action: () -> T): T = action()
             override fun runOnEdt(action: () -> Unit) {
-                // For activate tests: simulate switching active session
-                activeSessionRef = mockSessions.entries
-                    .firstOrNull { entry -> mockSessions.values.any { it === entry.value } }
-                    ?.let { /* keep current for now */ activeSessionRef }
                 action()
+                // After stop/activate: auto-switch to the first alive session
+                // (simulates what PhpStorm does when we call activateSession)
+                val firstAlive = mockSessions.entries.firstOrNull { !it.value.isStopped }
+                activeSessionRef = firstAlive?.value
             }
         }
         return service
@@ -226,7 +226,7 @@ class SessionToolsTest {
                     SessionState("111", "index.php", suspended = true, file = "src/index.php", line = 5, active = true),
                     SessionState("222", "test.php", suspended = true, file = "src/test.php", line = 10, active = false),
                 ),
-                expectedOutput = "#111 \"index.php\" [stopped] at src/index.php:5\n\n1 session(s) remaining:\n#222 \"test.php\" at src/test.php:10",
+                expectedOutput = "#111 \"index.php\" [stopped] at src/index.php:5\n\n1 session(s) remaining:\n#222 \"test.php\" at src/test.php:10 (active)",
             ),
             StopCase(
                 name = "all=true, no sessions",

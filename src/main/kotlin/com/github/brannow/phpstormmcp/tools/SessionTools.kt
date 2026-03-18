@@ -36,8 +36,14 @@ internal fun handleSessionStop(service: SessionService, all: Boolean): CallToolR
     if (sessions.isEmpty()) return ok("No sessions in project")
 
     val info = service.stopSmart(null)
-    AgentSessionTracker.clear()
     val remaining = service.listSessions()
+    // Track the auto-activated session so the agent can use debug tools immediately
+    val activeRemaining = remaining.firstOrNull { it.active }
+    if (activeRemaining != null) {
+        AgentSessionTracker.trackById(activeRemaining.id)
+    } else {
+        AgentSessionTracker.clear()
+    }
     return if (remaining.isEmpty()) {
         ok(formatSession(info))
     } else {
