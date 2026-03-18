@@ -8,6 +8,14 @@
   JetBrains IDE plugin that gives AI agents full debugger control via MCP
 </p>
 
+<p align="center">
+  <a href="https://github.com/brannow/idea-mcp-hub/actions/workflows/test.yml"><img src="https://github.com/brannow/idea-mcp-hub/actions/workflows/test.yml/badge.svg" alt="Test"></a>
+  <a href="https://github.com/brannow/idea-mcp-hub/releases/latest"><img src="https://img.shields.io/github/v/release/brannow/idea-mcp-hub?label=release" alt="Release"></a>
+  <img src="https://img.shields.io/badge/platform-PhpStorm%202025.3+-purple" alt="Platform">
+  <img src="https://img.shields.io/badge/MCP%20tools-12-blue" alt="MCP Tools">
+  <a href="https://github.com/brannow/idea-mcp-hub/blob/main/LICENSE"><img src="https://img.shields.io/github/license/brannow/idea-mcp-hub" alt="License"></a>
+</p>
+
 ---
 
 ## Setup
