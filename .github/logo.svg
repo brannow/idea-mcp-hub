@@ -1,0 +1,15 @@
+<svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+  <rect x="6" y="6" width="108" height="108" rx="24" fill="#2B2D30"/>
+  <!-- Edges -->
+  <line x1="60" y1="60" x2="30" y2="30" stroke="#CED0D6" stroke-width="3" stroke-linecap="round"/>
+  <line x1="60" y1="60" x2="90" y2="30" stroke="#CED0D6" stroke-width="3" stroke-linecap="round"/>
+  <line x1="60" y1="60" x2="90" y2="90" stroke="#CED0D6" stroke-width="3" stroke-linecap="round"/>
+  <line x1="60" y1="60" x2="30" y2="90" stroke="#CED0D6" stroke-width="3" stroke-linecap="round"/>
+  <!-- Outer nodes -->
+  <circle cx="30" cy="30" r="10" stroke="#CED0D6" stroke-width="3" fill="#2B2D30"/>
+  <circle cx="90" cy="30" r="10" stroke="#CED0D6" stroke-width="3" fill="#2B2D30"/>
+  <circle cx="90" cy="90" r="10" stroke="#CED0D6" stroke-width="3" fill="#2B2D30"/>
+  <circle cx="30" cy="90" r="10" stroke="#CED0D6" stroke-width="3" fill="#2B2D30"/>
+  <!-- Center hub -->
+  <circle cx="60" cy="60" r="12" fill="#CED0D6"/>
+</svg>

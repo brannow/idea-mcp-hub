@@ -1,8 +1,14 @@
-# MCP Hub
+<h1 align="center">MCP Hub</h1>
 
-MCP server plugin for JetBrains IDEs that gives AI agents access to features they can't get from the command line.
+<p align="center">
+  <img src=".github/logo.svg" width="120" height="120" alt="MCP Hub">
+</p>
 
-Agents can read files and run terminals on their own. They can't set breakpoints, step through code, or inspect variables. MCP Hub exposes these IDE-only capabilities as MCP tools.
+<p align="center">
+  JetBrains IDE plugin that gives AI agents full debugger control via MCP
+</p>
+
+---
 
 ## Setup
 
