@@ -3,6 +3,10 @@
     <name>MCP Hub</name>
     <vendor url="https://github.com/brannow/idea-mcp-hub">Benjamin Rannow</vendor>
     <change-notes><![CDATA[
+        <b>0.2.1</b>
+        <ul>
+            <li>Show plugin version in tool window status line</li>
+        </ul>
         <b>0.2.0</b>
         <ul>
             <li>New tool: session_activate — switch active debug session (like clicking a debug tab)</li>

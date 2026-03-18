@@ -8,6 +8,8 @@ import com.github.brannow.phpstormmcp.statusbar.McpActivityLog
 import com.github.brannow.phpstormmcp.statusbar.McpIcons
 import com.github.brannow.phpstormmcp.statusbar.McpServerState
 import com.intellij.icons.AllIcons
+import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.openapi.extensions.PluginId
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
@@ -102,13 +104,20 @@ class McpToolWindowPanel(
         updateLog()
     }
 
+    private fun pluginVersion(): String {
+        return PluginManagerCore.getPlugin(
+            PluginId.getId("com.github.brannow.phpstormmcp")
+        )?.version ?: "unknown"
+    }
+
     private fun updateState() {
         val state = McpServerState.getInstance(project)
+        val version = "v${pluginVersion()}"
         statusLabel.text = when (state.status) {
             McpServerState.Status.RUNNING ->
-                "\u25CF  Running on localhost:${state.transport.removePrefix("HTTP :")}  |  Clients: ${state.connectedClients}"
+                "\u25CF  Running on localhost:${state.transport.removePrefix("HTTP :")}  |  Clients: ${state.connectedClients}  |  $version"
             McpServerState.Status.STOPPED ->
-                "\u25CB  Stopped"
+                "\u25CB  Stopped  |  $version"
         }
         statusLabel.foreground = when (state.status) {
             McpServerState.Status.RUNNING -> JBUI.CurrentTheme.Link.Foreground.ENABLED
