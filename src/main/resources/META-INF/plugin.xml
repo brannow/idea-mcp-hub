@@ -3,6 +3,13 @@
     <name>MCP Control</name>
     <vendor url="https://github.com/brannow/idea-mcp-control">Benjamin Rannow</vendor>
     <change-notes><![CDATA[
+        <b>0.4.0</b>
+        <ul>
+            <li>New tool: breakpoint_add_exception — break on any PHP exception class by name</li>
+            <li>Short name lookup with disambiguation (RuntimeException → lists all matches if ambiguous)</li>
+            <li>Only classes extending \Exception or \Error are accepted</li>
+            <li>Exception breakpoints work with existing breakpoint_list, breakpoint_update, and breakpoint_remove</li>
+        </ul>
         <b>0.3.2</b>
         <ul>
             <li>Rebranding: MCP Hub → MCP Control</li>
@@ -49,11 +56,12 @@
         They can't set breakpoints, step through code, or inspect variables.
         MCP Control exposes these IDE-only capabilities as MCP tools.</p>
 
-        <h3>14 tools across 4 categories</h3>
+        <h3>15 tools across 4 categories</h3>
 
         <b>Breakpoints</b> (work without an active debug session)
         <ul>
             <li>list, add, update, remove</li>
+            <li>Exception breakpoints — pause on any PHP exception class</li>
             <li>Conditions, log expressions, suspend control</li>
         </ul>
 

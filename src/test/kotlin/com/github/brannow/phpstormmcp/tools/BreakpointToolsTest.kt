@@ -6,6 +6,7 @@ import com.intellij.xdebugger.XSourcePosition
 import com.intellij.xdebugger.breakpoints.SuspendPolicy
 import com.intellij.xdebugger.breakpoints.XBreakpointManager
 import com.intellij.xdebugger.breakpoints.XBreakpoint
+import com.intellij.xdebugger.breakpoints.XBreakpointType
 import com.intellij.xdebugger.XExpression
 import com.intellij.xdebugger.breakpoints.XLineBreakpoint
 import com.intellij.xdebugger.breakpoints.XBreakpointProperties
@@ -108,6 +109,14 @@ class BreakpointToolsTest {
             override fun isLibrary(file: VirtualFile): Boolean = file.path.contains("/vendor/")
             override fun <T> readAction(action: () -> T): T = action()
             override fun <T> runOnEdt(action: () -> T): T = action()
+
+            // Exception breakpoint stubs — no exception breakpoints in existing tests
+            override fun findExceptionBreakpointType(): XBreakpointType<*, *>? = null
+            override fun searchPhpClasses(input: String): List<PhpClassInfo> = emptyList()
+            override fun isExceptionClass(fqcn: String): Boolean = false
+            override fun getExceptionClassName(breakpoint: XBreakpoint<*>): String? = null
+            override fun addExceptionBreakpoint(fqcn: String): XBreakpoint<*> =
+                throw IllegalStateException("Not available in test")
         }
         return service
     }

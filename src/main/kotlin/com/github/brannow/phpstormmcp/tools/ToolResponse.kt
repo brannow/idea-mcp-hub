@@ -130,6 +130,90 @@ fun formatAddAnnotations(bp: BreakpointInfo, extraLabel: String?, activeLocation
     return if (annotations.isNotEmpty()) " (${annotations.joinToString(", ")})" else ""
 }
 
+// --- Exception breakpoint formatting ---
+
+fun formatExceptionBreakpoint(bp: ExceptionBreakpointInfo): String {
+    val annotations = formatExceptionAnnotations(bp)
+    val suffix = if (annotations.isNotEmpty()) " ($annotations)" else ""
+    return "#${bp.id} ${bp.exceptionClass}$suffix"
+}
+
+private fun formatExceptionAnnotations(bp: ExceptionBreakpointInfo): String {
+    val annotations = mutableListOf<String>()
+    if (!bp.enabled) annotations.add("disabled")
+    if (bp.condition != null) annotations.add("condition: ${bp.condition}")
+    if (bp.logExpression != null) annotations.add("log: ${bp.logExpression}")
+    if (!bp.suspend) annotations.add("no suspend")
+    return annotations.joinToString(", ")
+}
+
+// --- Combined breakpoint formatting (line + exception) ---
+
+/**
+ * Dispatch formatter for any breakpoint type — used by update/remove handlers.
+ */
+fun formatAnyBreakpoint(bp: AnyBreakpointInfo, activeLocation: Pair<String, Int>? = null): String {
+    return when (bp) {
+        is BreakpointInfo -> formatBreakpoint(bp, activeLocation)
+        is ExceptionBreakpointInfo -> formatExceptionBreakpoint(bp)
+    }
+}
+
+/**
+ * Full detail list with both types. Exception breakpoints in a separate section.
+ */
+fun formatCombinedBreakpointList(
+    lineBreakpoints: List<BreakpointInfo>,
+    exceptionBreakpoints: List<ExceptionBreakpointInfo>,
+    activeLocation: Pair<String, Int>? = null
+): String {
+    val sections = mutableListOf<String>()
+    if (lineBreakpoints.isNotEmpty()) {
+        sections.add(formatBreakpointList(lineBreakpoints, activeLocation))
+    }
+    if (exceptionBreakpoints.isNotEmpty()) {
+        val list = exceptionBreakpoints.joinToString("\n") { formatExceptionBreakpoint(it) }
+        if (lineBreakpoints.isNotEmpty()) {
+            sections.add("Exception breakpoints:\n$list")
+        } else {
+            sections.add(list)
+        }
+    }
+    return sections.joinToString("\n\n")
+}
+
+/**
+ * Full detail list for mixed AnyBreakpointInfo — splits by type, then delegates.
+ */
+fun formatAnyBreakpointList(breakpoints: List<AnyBreakpointInfo>, activeLocation: Pair<String, Int>? = null): String {
+    val line = breakpoints.filterIsInstance<BreakpointInfo>()
+    val exception = breakpoints.filterIsInstance<ExceptionBreakpointInfo>()
+    return formatCombinedBreakpointList(line, exception, activeLocation)
+}
+
+/**
+ * Compact index with both types — for error context hints.
+ */
+fun formatCombinedBreakpointIndex(
+    lineBreakpoints: List<BreakpointInfo>,
+    exceptionBreakpoints: List<ExceptionBreakpointInfo>,
+    activeLocation: Pair<String, Int>? = null
+): String {
+    val sections = mutableListOf<String>()
+    if (lineBreakpoints.isNotEmpty()) {
+        sections.add(formatBreakpointIndex(lineBreakpoints, activeLocation))
+    }
+    if (exceptionBreakpoints.isNotEmpty()) {
+        val list = exceptionBreakpoints.joinToString("\n") { "#${it.id} ${it.exceptionClass}" }
+        if (lineBreakpoints.isNotEmpty()) {
+            sections.add("Exception breakpoints:\n$list")
+        } else {
+            sections.add(list)
+        }
+    }
+    return sections.joinToString("\n\n")
+}
+
 // --- Session formatting ---
 
 fun formatSession(session: SessionInfo): String {

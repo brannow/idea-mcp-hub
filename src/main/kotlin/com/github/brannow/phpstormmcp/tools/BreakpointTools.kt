@@ -41,9 +41,10 @@ internal fun parseLocation(location: String): Pair<String, Int>? {
  * Not-found response: show the agent what exists so it can self-correct.
  */
 internal fun notFoundResponse(query: String, service: BreakpointService, activeLocation: Pair<String, Int>? = null): CallToolResult {
-    val all = service.listBreakpoints()
-    if (all.isEmpty()) return err("Breakpoint '$query' not found, no breakpoints in project")
-    return err("Breakpoint '$query' not found, current breakpoints:\n\n${formatBreakpointIndex(all, activeLocation)}")
+    val lineAll = service.listBreakpoints()
+    val exceptionAll = service.listExceptionBreakpoints()
+    if (lineAll.isEmpty() && exceptionAll.isEmpty()) return err("Breakpoint '$query' not found, no breakpoints in project")
+    return err("Breakpoint '$query' not found, current breakpoints:\n\n${formatCombinedBreakpointIndex(lineAll, exceptionAll, activeLocation)}")
 }
 
 /**
@@ -57,16 +58,19 @@ internal fun ambiguousResponse(query: String, breakpoints: List<BreakpointInfo>,
 // --- Extracted handler logic ---
 
 internal fun handleBreakpointList(service: BreakpointService, fileFilter: String?, activeLocation: Pair<String, Int>? = null): CallToolResult {
-    val breakpoints = service.listBreakpoints(fileFilter)
+    val lineBreakpoints = service.listBreakpoints(fileFilter)
+    // Exception breakpoints have no file — only show when unfiltered
+    val exceptionBreakpoints = if (fileFilter == null) service.listExceptionBreakpoints() else emptyList()
+
     return when {
-        breakpoints.isEmpty() && fileFilter != null && !service.fileExists(fileFilter) ->
+        lineBreakpoints.isEmpty() && exceptionBreakpoints.isEmpty() && fileFilter != null && !service.fileExists(fileFilter) ->
             ok("File '$fileFilter' not found")
-        breakpoints.isEmpty() && fileFilter != null ->
+        lineBreakpoints.isEmpty() && exceptionBreakpoints.isEmpty() && fileFilter != null ->
             ok("No breakpoints in $fileFilter")
-        breakpoints.isEmpty() ->
+        lineBreakpoints.isEmpty() && exceptionBreakpoints.isEmpty() ->
             ok("No breakpoints in project")
         else ->
-            ok(formatBreakpointList(breakpoints, activeLocation))
+            ok(formatCombinedBreakpointList(lineBreakpoints, exceptionBreakpoints, activeLocation))
     }
 }
 
@@ -117,7 +121,7 @@ internal fun handleBreakpointUpdate(
             return err("No changes specified. Use enabled, condition, log_expression, or suspend to update.")
         }
         val bp = service.updateBreakpoint(id, enabled, condition, logExpression, suspend)
-        ok(formatBreakpoint(bp, activeLocation))
+        ok(formatAnyBreakpoint(bp, activeLocation))
     } catch (e: AmbiguousBreakpointException) {
         ambiguousResponse(id, e.breakpoints, activeLocation)
     } catch (e: BreakpointNotFoundException) {
@@ -144,11 +148,13 @@ internal fun handleBreakpointRemove(
     val text = StringBuilder()
 
     if (result.removed.isNotEmpty()) {
-        text.append(formatBreakpointList(result.removed, activeLocation))
+        text.append(formatAnyBreakpointList(result.removed, activeLocation))
 
-        val remaining = service.listBreakpoints()
-        if (remaining.isNotEmpty()) {
-            text.append("\n\n${remaining.size} breakpoint(s) remaining:\n${formatBreakpointIndex(remaining, activeLocation)}")
+        val remainingLine = service.listBreakpoints()
+        val remainingException = service.listExceptionBreakpoints()
+        val remainingCount = remainingLine.size + remainingException.size
+        if (remainingCount > 0) {
+            text.append("\n\n$remainingCount breakpoint(s) remaining:\n${formatCombinedBreakpointIndex(remainingLine, remainingException, activeLocation)}")
         }
     }
 
@@ -156,19 +162,43 @@ internal fun handleBreakpointRemove(
         if (text.isNotEmpty()) text.append("\n\n")
         val notFoundStr = result.notFound.joinToString(", ") { "'$it'" }
 
-        val allBps = service.listBreakpoints()
-        if (allBps.isEmpty() && result.removed.isNotEmpty()) {
+        val allLine = service.listBreakpoints()
+        val allException = service.listExceptionBreakpoints()
+        val allCount = allLine.size + allException.size
+        if (allCount == 0 && result.removed.isNotEmpty()) {
             text.append("Breakpoint $notFoundStr not found")
-        } else if (allBps.isEmpty()) {
+        } else if (allCount == 0) {
             text.append("Breakpoint $notFoundStr not found, no breakpoints in project")
         } else {
-            text.append("Breakpoint $notFoundStr not found, current breakpoints:\n\n${formatBreakpointIndex(allBps, activeLocation)}")
+            text.append("Breakpoint $notFoundStr not found, current breakpoints:\n\n${formatCombinedBreakpointIndex(allLine, allException, activeLocation)}")
         }
     }
 
     // err() when nothing was removed (all IDs not found), ok() otherwise (including partial success)
     val isErr = result.removed.isEmpty() && result.notFound.isNotEmpty()
     return if (isErr) err(text.toString()) else ok(text.toString())
+}
+
+internal fun handleBreakpointAddException(
+    service: BreakpointService,
+    className: String?,
+    condition: String?,
+    logExpression: String?,
+    suspend: Boolean
+): CallToolResult {
+    if (className == null) return err("'class' is required")
+
+    return try {
+        val info = service.addExceptionBreakpoint(className, condition, logExpression, suspend)
+        ok(formatExceptionBreakpoint(info))
+    } catch (e: MultipleClassesFoundException) {
+        val list = e.classes.joinToString("\n") { "  \\${it.fqcn}" }
+        err("Multiple classes match '${e.query}':\n\n$list\n\nSpecify the full class name to disambiguate.")
+    } catch (e: IllegalArgumentException) {
+        err(e.message ?: "Unknown error")
+    } catch (e: IllegalStateException) {
+        err(e.message ?: "Unknown error")
+    }
 }
 
 // --- MCP Tool Registration ---
@@ -251,6 +281,60 @@ fun Server.registerBreakpointTools(project: Project) {
         }
     }
 
+    // --- breakpoint_add_exception ---
+    addTool(
+        name = "breakpoint_add_exception",
+        description = "Break when a PHP exception is thrown. " +
+                "Pass the class name — short names are resolved automatically. " +
+                "If multiple classes match, the response lists them for disambiguation. " +
+                "Only classes extending \\Exception or \\Error are accepted.",
+        toolAnnotations = ToolAnnotations(
+            readOnlyHint = false,
+            destructiveHint = false,
+            idempotentHint = false,
+            openWorldHint = false,
+        ),
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                putJsonObject("class") {
+                    put("type", "string")
+                    put(
+                        "description",
+                        "PHP exception class. Accepts short name (\"RuntimeException\") " +
+                                "or FQCN (\"\\App\\Exception\\CustomException\"). " +
+                                "Short names are looked up in the project index — " +
+                                "if ambiguous, the error lists all matches."
+                    )
+                }
+                putJsonObject("condition") {
+                    put("type", "string")
+                    put("description", "PHP condition expression, e.g. \"\$e->getCode() > 400\"")
+                }
+                putJsonObject("log_expression") {
+                    put("type", "string")
+                    put("description", "PHP expression to log when hit, e.g. \"\$e->getMessage()\"")
+                }
+                putJsonObject("suspend") {
+                    put("type", "boolean")
+                    put("description", "Pause execution when hit (default: true). False for log-only.")
+                }
+            },
+            required = listOf("class")
+        )
+    ) { request ->
+        val className = request.arguments?.get("class")?.jsonPrimitive?.content
+        val condition = request.arguments?.get("condition")?.jsonPrimitive?.content
+        val logExpression = request.arguments?.get("log_expression")?.jsonPrimitive?.content
+        val suspend = request.arguments?.get("suspend")?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: true
+
+        activityLog.log("breakpoint_add_exception $className")
+        try {
+            handleBreakpointAddException(service, className, condition, logExpression, suspend)
+        } catch (e: Exception) {
+            err(e.message ?: "Unknown error")
+        }
+    }
+
     // --- breakpoint_update ---
     addTool(
         name = "breakpoint_update",
@@ -265,7 +349,7 @@ fun Server.registerBreakpointTools(project: Project) {
             properties = buildJsonObject {
                 putJsonObject("id") {
                     put("type", "string")
-                    put("description", "Breakpoint #ID or file:line reference, e.g. \"src/index.php:5\"")
+                    put("description", "Breakpoint #ID, file:line, or exception class FQCN")
                 }
                 putJsonObject("enabled") {
                     put("type", "boolean")
@@ -315,7 +399,7 @@ fun Server.registerBreakpointTools(project: Project) {
             properties = buildJsonObject {
                 putJsonObject("id") {
                     put("type", "string")
-                    put("description", "Breakpoint #ID(s), file:line, or file path to purge. Comma-separated for multiple.")
+                    put("description", "Breakpoint #ID(s), file:line, file path, or exception class FQCN. Comma-separated for multiple.")
                 }
                 putJsonObject("all") {
                     put("type", "boolean")

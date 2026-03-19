@@ -12,7 +12,7 @@
   <a href="https://github.com/brannow/idea-mcp-control/actions/workflows/test.yml"><img src="https://github.com/brannow/idea-mcp-control/actions/workflows/test.yml/badge.svg" alt="Test"></a>
   <a href="https://github.com/brannow/idea-mcp-control/releases/latest"><img src="https://img.shields.io/github/v/release/brannow/idea-mcp-control?label=release" alt="Release"></a>
   <img src="https://img.shields.io/badge/platform-PhpStorm%202025.3+-purple" alt="Platform">
-  <img src="https://img.shields.io/badge/MCP%20tools-14-blue" alt="MCP Tools">
+  <img src="https://img.shields.io/badge/MCP%20tools-15-blue" alt="MCP Tools">
   <a href="https://github.com/brannow/idea-mcp-control/blob/main/LICENSE"><img src="https://img.shields.io/github/license/brannow/idea-mcp-control" alt="License"></a>
 </p>
 
@@ -46,16 +46,17 @@ If the port is already in use (e.g., another PhpStorm instance), you get a notif
 
 ## Tools
 
-14 tools across 4 categories. All debug tools operate on the active session. Use `session_activate` to switch.
+15 tools across 4 categories. All debug tools operate on the active session. Use `session_activate` to switch.
 
 ### Breakpoints (work without a debug session)
 
 | Tool | What it does |
 |---|---|
-| `breakpoint_list` | List all breakpoints with conditions, status, annotations |
+| `breakpoint_list` | List all breakpoints (line + exception) with conditions, status, annotations |
 | `breakpoint_add` | Add a line breakpoint with optional condition, log expression, suspend control |
-| `breakpoint_update` | Modify an existing breakpoint (enable/disable, change condition, etc.) |
-| `breakpoint_remove` | Remove by ID, file:line, file path, or all |
+| `breakpoint_add_exception` | Break on a PHP exception class. Short names are resolved via project index. |
+| `breakpoint_update` | Modify any breakpoint by ID (enable/disable, change condition, etc.) |
+| `breakpoint_remove` | Remove by ID, file:line, exception class FQCN, file path, or all |
 
 ### Session management
 
