@@ -84,21 +84,25 @@ internal fun resolveActiveSession(project: Project): Pair<XDebugSession?, CallTo
 
     // Check for unexpected session switch
     val currentId = System.identityHashCode(session).toString()
-    val switchError = AgentSessionTracker.checkSessionSwitch(
-        currentSessionId = currentId,
-        currentSessionName = session.sessionName
-    ) { lastId ->
+    val lastId = AgentSessionTracker.lastSessionId
+    if (lastId != null && lastId != currentId) {
+        // Previous session terminated? Auto-track the new one — no need to block.
         val previousSession = manager.debugSessions.firstOrNull {
             System.identityHashCode(it).toString() == lastId
         }
-        when {
-            previousSession == null -> "terminated"
-            previousSession.isStopped -> "terminated"
-            previousSession.isSuspended -> "paused, inactive"
-            else -> "running, inactive"
+        val previousAlive = previousSession != null && !previousSession.isStopped
+
+        if (previousAlive) {
+            // Previous session is still alive — genuine conflict, block
+            val status = if (previousSession!!.isSuspended) "paused, inactive" else "running, inactive"
+            val switchError = AgentSessionTracker.checkSessionSwitch(
+                currentSessionId = currentId,
+                currentSessionName = session.sessionName
+            ) { status }
+            if (switchError != null) return null to err(switchError)
         }
+        // Previous terminated or not found — auto-track new session
     }
-    if (switchError != null) return null to err(switchError)
 
     AgentSessionTracker.track(session)
     return session to null
@@ -276,6 +280,11 @@ fun Server.registerDebugTools(project: Project) {
                     put("type", "boolean")
                     put("description", "Include PHP superglobals in variables. Default: false.")
                 }
+                putJsonObject("expand_stack") {
+                    put("type", "boolean")
+                    put("description", "Show all stack frames including library frames. " +
+                            "Default: false (consecutive library frames are collapsed).")
+                }
             },
             required = listOf("frame_index")
         )
@@ -313,6 +322,7 @@ fun Server.registerDebugTools(project: Project) {
                 ?.toSet()
                 ?.ifEmpty { null }
             val includeGlobals = request.arguments?.get("globals")?.jsonPrimitive?.booleanOrNull ?: false
+            val expandStack = request.arguments?.get("expand_stack")?.jsonPrimitive?.booleanOrNull ?: false
             val includeSource = includeParam == null || "source" in includeParam
             val includeVars = includeParam == null || "variables" in includeParam
             val includeStack = includeParam == null || "stacktrace" in includeParam
@@ -327,7 +337,7 @@ fun Server.registerDebugTools(project: Project) {
             } else null
             val frames = if (includeStack) extractStackFrames(session, stackFrameService) else null
 
-            ok(formatSnapshot(sessionInfo, source, variables, frames, activeDepth = frameIndex))
+            ok(formatSnapshot(sessionInfo, source, variables, frames, activeDepth = frameIndex, collapseLibrary = !expandStack))
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }
@@ -336,8 +346,9 @@ fun Server.registerDebugTools(project: Project) {
     // --- debug_evaluate ---
     addTool(
         name = "debug_evaluate",
-        description = "Evaluate a PHP expression in the current debug scope — " +
-                "test ideas, call methods, or modify variables. Requires a paused session.",
+        description = "Evaluate a PHP expression in the top stack frame's scope (frame #0) — " +
+                "test ideas, call methods, or modify variables. " +
+                "Always uses frame #0 regardless of debug_inspect_frame. Requires a paused session.",
         toolAnnotations = ToolAnnotations(
             readOnlyHint = false,
             destructiveHint = false,
@@ -376,22 +387,16 @@ fun Server.registerDebugTools(project: Project) {
             val frame = stack.topFrame
                 ?: return@addTool err("No stack frame available")
 
-            // Position context (best-effort)
-            val sourceHeader = try {
-                extractSourceContext(session, sourceService)?.let { formatSourceHeader(it) }
-            } catch (_: Exception) { null }
-
             val node = try {
                 variableService.evaluateExpression(frame, expression, depth)
             } catch (e: EvaluationException) {
-                val prefix = if (sourceHeader != null) "at $sourceHeader\n\n" else ""
                 val msg = (e.message ?: "Unknown error")
                     .removePrefix("error evaluating code: ")
                     .removePrefix("Error evaluating code: ")
-                return@addTool err("$prefix$msg")
+                return@addTool err(msg)
             }
 
-            ok(formatEvaluationResult(expression, node, sourceHeader))
+            ok(formatEvaluationResult(expression, node))
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }
@@ -422,6 +427,11 @@ fun Server.registerDebugTools(project: Project) {
                     put("type", "boolean")
                     put("description", "Include PHP superglobals (\$_SERVER, \$_ENV, \$_GET, etc.). Default: false.")
                 }
+                putJsonObject("expand_stack") {
+                    put("type", "boolean")
+                    put("description", "Show all stack frames including library frames. " +
+                            "Default: false (consecutive library frames are collapsed).")
+                }
             },
             required = emptyList()
         )
@@ -436,6 +446,7 @@ fun Server.registerDebugTools(project: Project) {
                 ?.toSet()
                 ?.ifEmpty { null }
             val includeGlobals = request.arguments?.get("globals")?.jsonPrimitive?.booleanOrNull ?: false
+            val expandStack = request.arguments?.get("expand_stack")?.jsonPrimitive?.booleanOrNull ?: false
             // null = include everything
             val includeSource = includeParam == null || "source" in includeParam
             val includeVars = includeParam == null || "variables" in includeParam
@@ -451,7 +462,7 @@ fun Server.registerDebugTools(project: Project) {
             } else null
             val frames = if (includeStack) extractStackFrames(session!!, stackFrameService) else null
 
-            ok(formatSnapshot(sessionInfo, source, variables, frames))
+            ok(formatSnapshot(sessionInfo, source, variables, frames, collapseLibrary = !expandStack))
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }

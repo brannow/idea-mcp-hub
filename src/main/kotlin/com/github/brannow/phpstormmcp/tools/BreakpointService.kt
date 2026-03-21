@@ -85,6 +85,7 @@ class BreakpointService(private val project: Project) {
         fun resolveFile(path: String): VirtualFile?
         fun getLineCount(file: VirtualFile): Int
         fun isLibrary(file: VirtualFile): Boolean
+        fun isMethodBreakpointLine(file: VirtualFile, line: Int): Boolean
         fun <T> readAction(action: () -> T): T
         fun <T> runOnEdt(action: () -> T): T
 
@@ -120,6 +121,13 @@ class BreakpointService(private val project: Project) {
 
         override fun isLibrary(file: VirtualFile): Boolean {
             return ProjectFileIndex.getInstance(project).isInLibrary(file)
+        }
+
+        override fun isMethodBreakpointLine(file: VirtualFile, line: Int): Boolean {
+            val methodType = XDebuggerUtil.getInstance().lineBreakpointTypes.firstOrNull {
+                it.id.contains("php", ignoreCase = true) && it.id.contains("method", ignoreCase = true)
+            } ?: return false
+            return methodType.canPutAt(file, line, project)
         }
 
         override fun <T> readAction(action: () -> T): T {
@@ -307,6 +315,13 @@ class BreakpointService(private val project: Project) {
             val lineCount = platform.getLineCount(virtualFile)
             if (lineCount > 0 && line > lineCount) {
                 throw IllegalArgumentException("Line $line is beyond end of file ($file has $lineCount lines)")
+            }
+
+            if (platform.isMethodBreakpointLine(virtualFile, line - 1)) {
+                throw IllegalArgumentException(
+                    "Line $line in $file is a method/function definition. " +
+                        "Method breakpoints are not supported via MCP — ask the user to add it manually in PhpStorm."
+                )
             }
 
             Triple(type, virtualFile, findBreakpointsAtLine(virtualFile, line - 1))

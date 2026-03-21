@@ -12,14 +12,13 @@ class EvaluateFormatTest {
         val name: String,
         val expression: String,
         val node: VariableNode,
-        val sourceHeader: String?,
         val expected: String,
     )
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("evalCases")
     fun `formatEvaluationResult`(case: EvalCase) {
-        assertEquals(case.expected, formatEvaluationResult(case.expression, case.node, case.sourceHeader))
+        assertEquals(case.expected, formatEvaluationResult(case.expression, case.node))
     }
 
     // --- formatSourceHeader ---
@@ -41,28 +40,22 @@ class EvaluateFormatTest {
         @JvmStatic
         fun evalCases() = listOf(
             EvalCase(
-                name = "scalar int with position",
+                name = "scalar int",
                 expression = "count(\$items)",
                 node = VariableNode("(eval)", "int", "3", false),
-                sourceHeader = "\\App\\UserService::processRequest() — src/UserService.php:42",
-                expected = "at \\App\\UserService::processRequest() — src/UserService.php:42\n\n" +
-                        "count(\$items) = {int} 3"
+                expected = "count(\$items) = {int} 3"
             ),
             EvalCase(
                 name = "string result",
                 expression = "\$user->getName()",
                 node = VariableNode("(eval)", "string", "\"John Doe\"", false),
-                sourceHeader = "src/UserService.php:42",
-                expected = "at src/UserService.php:42\n\n" +
-                        "\$user->getName() = {string} \"John Doe\""
+                expected = "\$user->getName() = {string} \"John Doe\""
             ),
             EvalCase(
                 name = "object result depth 0",
                 expression = "\$this->repository->findByEmail('test@example.com')",
                 node = VariableNode("(eval)", "App\\Entity\\User", "", true),
-                sourceHeader = "src/UserService.php:42",
-                expected = "at src/UserService.php:42\n\n" +
-                        "\$this->repository->findByEmail('test@example.com') = {App\\Entity\\User}"
+                expected = "\$this->repository->findByEmail('test@example.com') = {App\\Entity\\User}"
             ),
             EvalCase(
                 name = "object result with depth 1",
@@ -72,9 +65,7 @@ class EvaluateFormatTest {
                     VariableNode("email", "string", "\"john@example.com\"", false),
                     VariableNode("age", "int", "30", false),
                 )),
-                sourceHeader = "src/UserService.php:42",
-                expected = "at src/UserService.php:42\n\n" +
-                        "\$user = {App\\Entity\\User}\n" +
+                expected = "\$user = {App\\Entity\\User}\n" +
                         "  name = {string} \"John\"\n" +
                         "  email = {string} \"john@example.com\"\n" +
                         "  age = {int} 30"
@@ -83,24 +74,13 @@ class EvaluateFormatTest {
                 name = "null result",
                 expression = "\$config['missing']",
                 node = VariableNode("(eval)", "null", "null", false),
-                sourceHeader = "src/index.php:10",
-                expected = "at src/index.php:10\n\n" +
-                        "\$config['missing'] = {null} null"
+                expected = "\$config['missing'] = {null} null"
             ),
             EvalCase(
                 name = "bool result",
                 expression = "isset(\$config['debug'])",
                 node = VariableNode("(eval)", "bool", "true", false),
-                sourceHeader = "src/index.php:10",
-                expected = "at src/index.php:10\n\n" +
-                        "isset(\$config['debug']) = {bool} true"
-            ),
-            EvalCase(
-                name = "no position context",
-                expression = "1 + 1",
-                node = VariableNode("(eval)", "int", "2", false),
-                sourceHeader = null,
-                expected = "1 + 1 = {int} 2"
+                expected = "isset(\$config['debug']) = {bool} true"
             ),
             EvalCase(
                 name = "array result with depth",
@@ -110,9 +90,7 @@ class EvaluateFormatTest {
                     VariableNode("1", "string", "\"cache\"", false),
                     VariableNode("2", "string", "\"db\"", false),
                 )),
-                sourceHeader = "src/index.php:10",
-                expected = "at src/index.php:10\n\n" +
-                        "array_keys(\$config) = {array} array(3)\n" +
+                expected = "array_keys(\$config) = {array} array(3)\n" +
                         "  0 = {string} \"debug\"\n" +
                         "  1 = {string} \"cache\"\n" +
                         "  2 = {string} \"db\""

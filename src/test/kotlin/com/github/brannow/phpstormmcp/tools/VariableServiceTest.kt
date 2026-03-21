@@ -156,7 +156,7 @@ class VariableServiceTest {
 
     @Test
     fun `isObjectType — scalars and arrays are not objects`() {
-        listOf("array", "int", "string", "float", "bool", "null", "Array", "STRING").forEach {
+        listOf("array", "array[7]", "array[0]", "int", "string", "string[25]", "float", "bool", "null", "Array", "STRING").forEach {
             assertEquals(false, VariableService.isObjectType(it), "Expected '$it' to NOT be an object type")
         }
     }

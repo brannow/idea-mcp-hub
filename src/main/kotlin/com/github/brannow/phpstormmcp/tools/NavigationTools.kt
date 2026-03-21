@@ -65,7 +65,8 @@ internal fun buildSnapshotFromResult(
     includeSource: Boolean,
     includeVars: Boolean,
     includeStack: Boolean,
-    includeGlobals: Boolean
+    includeGlobals: Boolean,
+    expandStack: Boolean = false
 ): CallToolResult {
     return when (result) {
         is StepResult.SessionEnded -> ok("Session ended")
@@ -79,19 +80,20 @@ internal fun buildSnapshotFromResult(
             } else null
             val frames = if (includeStack) extractStackFrames(session, stackFrameService) else null
 
-            ok(formatSnapshot(sessionInfo, source, variables, frames))
+            ok(formatSnapshot(sessionInfo, source, variables, frames, collapseLibrary = !expandStack))
         }
     }
 }
 
 /**
- * Parse include/globals from request arguments.
+ * Parse include/globals/expand_stack from request arguments.
  */
 private data class SnapshotParams(
     val includeSource: Boolean,
     val includeVars: Boolean,
     val includeStack: Boolean,
     val includeGlobals: Boolean,
+    val expandStack: Boolean,
 )
 
 private fun parseSnapshotParams(arguments: JsonObject?): SnapshotParams {
@@ -100,11 +102,13 @@ private fun parseSnapshotParams(arguments: JsonObject?): SnapshotParams {
         ?.toSet()
         ?.ifEmpty { null }
     val includeGlobals = arguments?.get("globals")?.jsonPrimitive?.booleanOrNull ?: false
+    val expandStack = arguments?.get("expand_stack")?.jsonPrimitive?.booleanOrNull ?: false
     return SnapshotParams(
         includeSource = includeParam == null || "source" in includeParam,
         includeVars = includeParam == null || "variables" in includeParam,
         includeStack = includeParam == null || "stacktrace" in includeParam,
         includeGlobals = includeGlobals,
+        expandStack = expandStack,
     )
 }
 
@@ -125,6 +129,11 @@ private fun JsonObjectBuilder.putSnapshotParams() {
     putJsonObject("globals") {
         put("type", "boolean")
         put("description", "Include PHP superglobals in variables. Default: false.")
+    }
+    putJsonObject("expand_stack") {
+        put("type", "boolean")
+        put("description", "Show all stack frames including library frames. " +
+                "Default: false (consecutive library frames are collapsed).")
     }
 }
 
@@ -179,7 +188,8 @@ fun Server.registerNavigationTools(project: Project) {
 
             buildSnapshotFromResult(
                 result, session!!, sessionService, sourceService, variableService, stackFrameService,
-                params.includeSource, params.includeVars, params.includeStack, params.includeGlobals
+                params.includeSource, params.includeVars, params.includeStack, params.includeGlobals,
+                params.expandStack
             )
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
@@ -235,7 +245,8 @@ fun Server.registerNavigationTools(project: Project) {
 
             buildSnapshotFromResult(
                 result, session, sessionService, sourceService, variableService, stackFrameService,
-                params.includeSource, params.includeVars, params.includeStack, params.includeGlobals
+                params.includeSource, params.includeVars, params.includeStack, params.includeGlobals,
+                params.expandStack
             )
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")

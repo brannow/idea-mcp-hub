@@ -22,8 +22,12 @@ fun err(text: String) = CallToolResult(content = listOf(TextContent(text)), isEr
 
 // --- Breakpoint formatting ---
 
-fun formatBreakpoint(bp: BreakpointInfo, activeLocation: Pair<String, Int>? = null): String {
-    val annotations = formatAnnotations(bp, activeLocation)
+fun formatBreakpoint(
+    bp: BreakpointInfo,
+    activeLocation: Pair<String, Int>? = null,
+    highlights: Map<String, String> = emptyMap()
+): String {
+    val annotations = formatAnnotations(bp, activeLocation, highlights)
     val suffix = if (annotations.isNotEmpty()) " ($annotations)" else ""
     return "#${bp.id} ${bp.file}:${bp.line}$suffix"
 }
@@ -54,7 +58,11 @@ fun formatBreakpointIndex(breakpoints: List<BreakpointInfo>, activeLocation: Pai
 /**
  * Smart list: single breakpoints stay flat, same-line breakpoints get grouped.
  */
-fun formatBreakpointList(breakpoints: List<BreakpointInfo>, activeLocation: Pair<String, Int>? = null): String {
+fun formatBreakpointList(
+    breakpoints: List<BreakpointInfo>,
+    activeLocation: Pair<String, Int>? = null,
+    highlights: Map<String, String> = emptyMap()
+): String {
     // Group by file:line, preserve insertion order
     val grouped = linkedMapOf<String, MutableList<BreakpointInfo>>()
     for (bp in breakpoints) {
@@ -63,9 +71,9 @@ fun formatBreakpointList(breakpoints: List<BreakpointInfo>, activeLocation: Pair
 
     return grouped.entries.joinToString("\n") { (location, bps) ->
         if (bps.size == 1) {
-            formatBreakpoint(bps.first(), activeLocation)
+            formatBreakpoint(bps.first(), activeLocation, highlights)
         } else {
-            formatBreakpointGroup(location, bps, activeLocation)
+            formatBreakpointGroup(location, bps, activeLocation, highlights)
         }
     }
 }
@@ -74,9 +82,12 @@ fun formatBreakpointList(breakpoints: List<BreakpointInfo>, activeLocation: Pair
  * Grouped sub-list: breakpoints as indented bullets with only #ID + annotations.
  * Use with a header line when multiple breakpoints share the same location.
  */
-fun formatBreakpointGroupChildren(breakpoints: List<BreakpointInfo>): String {
+fun formatBreakpointGroupChildren(
+    breakpoints: List<BreakpointInfo>,
+    highlights: Map<String, String> = emptyMap()
+): String {
     return breakpoints.joinToString("\n") { bp ->
-        val annotations = formatAnnotations(bp)
+        val annotations = formatAnnotations(bp, highlights = highlights)
         val suffix = if (annotations.isNotEmpty()) " ($annotations)" else ""
         " - #${bp.id}$suffix"
     }
@@ -91,10 +102,15 @@ fun formatBreakpointGroupChildren(breakpoints: List<BreakpointInfo>): String {
  * Full grouped view: location as header with hint, breakpoints as indented bullets.
  * With exact breakpoint ID matching, the specific active breakpoint is marked in the group.
  */
-fun formatBreakpointGroup(location: String, breakpoints: List<BreakpointInfo>, activeLocation: Pair<String, Int>? = null): String {
+fun formatBreakpointGroup(
+    location: String,
+    breakpoints: List<BreakpointInfo>,
+    activeLocation: Pair<String, Int>? = null,
+    highlights: Map<String, String> = emptyMap()
+): String {
     val isActive = activeLocation != null && breakpoints.any { isActiveBreakpoint(it, activeLocation) }
     val header = if (isActive) "$location (active, multi-breakpoint-line)" else "$location (multi-breakpoint-line)"
-    return "$header\n${formatBreakpointGroupChildren(breakpoints)}"
+    return "$header\n${formatBreakpointGroupChildren(breakpoints, highlights)}"
 }
 
 private fun isActiveBreakpoint(bp: BreakpointInfo, activeLocation: Pair<String, Int>?): Boolean {
@@ -102,8 +118,13 @@ private fun isActiveBreakpoint(bp: BreakpointInfo, activeLocation: Pair<String, 
     return bp.file == activeLocation.first && bp.line == activeLocation.second
 }
 
-private fun formatAnnotations(bp: BreakpointInfo, activeLocation: Pair<String, Int>? = null): String {
+private fun formatAnnotations(
+    bp: BreakpointInfo,
+    activeLocation: Pair<String, Int>? = null,
+    highlights: Map<String, String> = emptyMap()
+): String {
     val annotations = mutableListOf<String>()
+    highlights[bp.id]?.let { annotations.add(it) }
     if (isActiveBreakpoint(bp, activeLocation)) annotations.add("active")
     if (bp.method) annotations.add("method")
     if (bp.vendor) annotations.add("vendor")
@@ -114,32 +135,23 @@ private fun formatAnnotations(bp: BreakpointInfo, activeLocation: Pair<String, I
     return annotations.joinToString(", ")
 }
 
-/**
- * Annotations for breakpoint_add context list — supports an extra leading label (e.g. "new").
- */
-fun formatAddAnnotations(bp: BreakpointInfo, extraLabel: String?, activeLocation: Pair<String, Int>? = null): String {
-    val annotations = mutableListOf<String>()
-    if (extraLabel != null) annotations.add(extraLabel)
-    if (isActiveBreakpoint(bp, activeLocation)) annotations.add("active")
-    if (bp.method) annotations.add("method")
-    if (bp.vendor) annotations.add("vendor")
-    if (!bp.enabled) annotations.add("disabled")
-    if (bp.condition != null) annotations.add("condition: ${bp.condition}")
-    if (bp.logExpression != null) annotations.add("log: ${bp.logExpression}")
-    if (!bp.suspend) annotations.add("no suspend")
-    return if (annotations.isNotEmpty()) " (${annotations.joinToString(", ")})" else ""
-}
-
 // --- Exception breakpoint formatting ---
 
-fun formatExceptionBreakpoint(bp: ExceptionBreakpointInfo): String {
-    val annotations = formatExceptionAnnotations(bp)
+fun formatExceptionBreakpoint(
+    bp: ExceptionBreakpointInfo,
+    highlights: Map<String, String> = emptyMap()
+): String {
+    val annotations = formatExceptionAnnotations(bp, highlights)
     val suffix = if (annotations.isNotEmpty()) " ($annotations)" else ""
     return "#${bp.id} ${bp.exceptionClass}$suffix"
 }
 
-private fun formatExceptionAnnotations(bp: ExceptionBreakpointInfo): String {
+private fun formatExceptionAnnotations(
+    bp: ExceptionBreakpointInfo,
+    highlights: Map<String, String> = emptyMap()
+): String {
     val annotations = mutableListOf<String>()
+    highlights[bp.id]?.let { annotations.add(it) }
     if (!bp.enabled) annotations.add("disabled")
     if (bp.condition != null) annotations.add("condition: ${bp.condition}")
     if (bp.logExpression != null) annotations.add("log: ${bp.logExpression}")
@@ -152,10 +164,14 @@ private fun formatExceptionAnnotations(bp: ExceptionBreakpointInfo): String {
 /**
  * Dispatch formatter for any breakpoint type — used by update/remove handlers.
  */
-fun formatAnyBreakpoint(bp: AnyBreakpointInfo, activeLocation: Pair<String, Int>? = null): String {
+fun formatAnyBreakpoint(
+    bp: AnyBreakpointInfo,
+    activeLocation: Pair<String, Int>? = null,
+    highlights: Map<String, String> = emptyMap()
+): String {
     return when (bp) {
-        is BreakpointInfo -> formatBreakpoint(bp, activeLocation)
-        is ExceptionBreakpointInfo -> formatExceptionBreakpoint(bp)
+        is BreakpointInfo -> formatBreakpoint(bp, activeLocation, highlights)
+        is ExceptionBreakpointInfo -> formatExceptionBreakpoint(bp, highlights)
     }
 }
 
@@ -165,14 +181,15 @@ fun formatAnyBreakpoint(bp: AnyBreakpointInfo, activeLocation: Pair<String, Int>
 fun formatCombinedBreakpointList(
     lineBreakpoints: List<BreakpointInfo>,
     exceptionBreakpoints: List<ExceptionBreakpointInfo>,
-    activeLocation: Pair<String, Int>? = null
+    activeLocation: Pair<String, Int>? = null,
+    highlights: Map<String, String> = emptyMap()
 ): String {
     val sections = mutableListOf<String>()
     if (lineBreakpoints.isNotEmpty()) {
-        sections.add(formatBreakpointList(lineBreakpoints, activeLocation))
+        sections.add(formatBreakpointList(lineBreakpoints, activeLocation, highlights))
     }
     if (exceptionBreakpoints.isNotEmpty()) {
-        val list = exceptionBreakpoints.joinToString("\n") { formatExceptionBreakpoint(it) }
+        val list = exceptionBreakpoints.joinToString("\n") { formatExceptionBreakpoint(it, highlights) }
         if (lineBreakpoints.isNotEmpty()) {
             sections.add("Exception breakpoints:\n$list")
         } else {
@@ -185,10 +202,14 @@ fun formatCombinedBreakpointList(
 /**
  * Full detail list for mixed AnyBreakpointInfo — splits by type, then delegates.
  */
-fun formatAnyBreakpointList(breakpoints: List<AnyBreakpointInfo>, activeLocation: Pair<String, Int>? = null): String {
+fun formatAnyBreakpointList(
+    breakpoints: List<AnyBreakpointInfo>,
+    activeLocation: Pair<String, Int>? = null,
+    highlights: Map<String, String> = emptyMap()
+): String {
     val line = breakpoints.filterIsInstance<BreakpointInfo>()
     val exception = breakpoints.filterIsInstance<ExceptionBreakpointInfo>()
-    return formatCombinedBreakpointList(line, exception, activeLocation)
+    return formatCombinedBreakpointList(line, exception, activeLocation, highlights)
 }
 
 /**
@@ -216,7 +237,10 @@ fun formatCombinedBreakpointIndex(
 
 // --- Session formatting ---
 
-fun formatSession(session: SessionInfo): String {
+fun formatSession(
+    session: SessionInfo,
+    breakpoints: List<BreakpointInfo> = emptyList()
+): String {
     val parts = mutableListOf<String>()
     // Only show status when it's non-default. Paused is the expected state.
     val statusTag = when (session.status) {
@@ -227,7 +251,11 @@ fun formatSession(session: SessionInfo): String {
     parts.add("#${session.id} \"${session.name}\"$statusTag")
 
     if (session.currentFile != null && session.currentLine != null) {
-        parts.add("at ${session.currentFile}:${session.currentLine}")
+        val matchingBp = breakpoints.firstOrNull {
+            it.file == session.currentFile && it.line == session.currentLine
+        }
+        val bpHint = if (matchingBp != null) " (breakpoint #${matchingBp.id})" else ""
+        parts.add("at ${session.currentFile}:${session.currentLine}$bpHint")
     }
     if (session.active) {
         parts.add("(active)")
@@ -236,8 +264,11 @@ fun formatSession(session: SessionInfo): String {
     return parts.joinToString(" ")
 }
 
-fun formatSessionList(sessions: List<SessionInfo>): String {
-    return sessions.joinToString("\n") { formatSession(it) }
+fun formatSessionList(
+    sessions: List<SessionInfo>,
+    breakpoints: List<BreakpointInfo> = emptyList()
+): String {
+    return sessions.joinToString("\n") { formatSession(it, breakpoints) }
 }
 
 // --- Snapshot formatting ---
@@ -247,7 +278,8 @@ fun formatSnapshot(
     source: SourceContext?,
     variables: List<VariableInfo>?,
     frames: List<FrameInfo>?,
-    activeDepth: Int = 0
+    activeDepth: Int = 0,
+    collapseLibrary: Boolean = true
 ): String {
     val sections = mutableListOf<String>()
 
@@ -268,7 +300,7 @@ fun formatSnapshot(
 
     // Stack trace
     if (frames != null) {
-        sections.add(formatStackTrace(frames, activeDepth))
+        sections.add(formatStackTrace(frames, activeDepth, collapseLibrary))
     }
 
     return sections.joinToString("\n\n")
@@ -388,39 +420,69 @@ internal fun variableDisplayValue(node: VariableNode): String {
 
 // --- Evaluation formatting ---
 
-fun formatEvaluationResult(expression: String, node: VariableNode, sourceHeader: String?): String {
-    val sections = mutableListOf<String>()
-
-    if (sourceHeader != null) {
-        sections.add("at $sourceHeader")
-    }
-
+fun formatEvaluationResult(expression: String, node: VariableNode): String {
     val display = variableDisplayValue(node)
     val circularTag = if (node.circular) " (circular reference)" else ""
     val header = "$expression = $display$circularTag"
     val children = node.children
-    if (children.isNullOrEmpty()) {
-        sections.add(header)
-    } else {
-        sections.add("$header\n${formatVariableChildren(children, indent = 1)}")
-    }
-
-    return sections.joinToString("\n\n")
+    if (children.isNullOrEmpty()) return header
+    return "$header\n${formatVariableChildren(children, indent = 1)}"
 }
 
 // --- Stack frame formatting ---
 
-fun formatStackTrace(frames: List<FrameInfo>, activeDepth: Int = 0): String {
+fun formatStackTrace(
+    frames: List<FrameInfo>,
+    activeDepth: Int = 0,
+    collapseLibrary: Boolean = true
+): String {
     if (frames.isEmpty()) return "(no stack frames)"
-    return frames.joinToString("\n") { frame ->
-        val location = when {
-            frame.file != null && frame.line != null -> "${frame.file}:${frame.line}"
-            frame.file != null -> frame.file
-            else -> "(unknown)"
-        }
-        val name = frame.name ?: "(unknown)"
-        val lib = if (frame.isLibrary) " (library)" else ""
-        val prefix = if (frame.depth == activeDepth) "→" else " "
-        "$prefix#${frame.depth} $name at $location$lib"
+
+    if (!collapseLibrary) {
+        return formatStackTraceFlat(frames, activeDepth)
     }
+
+    // Group consecutive library frames and collapse runs of 3+
+    val lines = mutableListOf<String>()
+    var i = 0
+    while (i < frames.size) {
+        val frame = frames[i]
+        if (frame.isLibrary && frame.depth != activeDepth) {
+            // Collect consecutive library frames (excluding active frame)
+            val runStart = i
+            while (i < frames.size && frames[i].isLibrary && frames[i].depth != activeDepth) {
+                i++
+            }
+            val run = frames.subList(runStart, i)
+            if (run.size >= 3) {
+                val firstDepth = run.first().depth
+                val lastDepth = run.last().depth
+                lines.add(" #$firstDepth-#$lastDepth [${run.size} library frames]")
+            } else {
+                for (f in run) {
+                    lines.add(formatFrame(f, activeDepth))
+                }
+            }
+        } else {
+            lines.add(formatFrame(frame, activeDepth))
+            i++
+        }
+    }
+    return lines.joinToString("\n")
+}
+
+private fun formatStackTraceFlat(frames: List<FrameInfo>, activeDepth: Int): String {
+    return frames.joinToString("\n") { formatFrame(it, activeDepth) }
+}
+
+private fun formatFrame(frame: FrameInfo, activeDepth: Int): String {
+    val location = when {
+        frame.file != null && frame.line != null -> "${frame.file}:${frame.line}"
+        frame.file != null -> frame.file
+        else -> "(unknown)"
+    }
+    val name = frame.name ?: "(unknown)"
+    val lib = if (frame.isLibrary) " (library)" else ""
+    val prefix = if (frame.depth == activeDepth) "→" else " "
+    return "$prefix#${frame.depth} $name at $location$lib"
 }

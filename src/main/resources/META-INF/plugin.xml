@@ -3,6 +3,19 @@
     <name>MCP Control</name>
     <vendor url="https://github.com/brannow/idea-mcp-control">Benjamin Rannow</vendor>
     <change-notes><![CDATA[
+        <b>0.5.0</b>
+        <ul>
+            <li>Breakpoint mutations (add, update, remove) now return the full breakpoint list with (new)/(updated) highlights</li>
+            <li>Batch operations: breakpoint_add accepts comma-separated locations, breakpoint_update accepts comma-separated IDs</li>
+            <li>Method breakpoint detection: adding a breakpoint on a function definition line is blocked with guidance to add manually</li>
+            <li>Stack trace collapsing: 3+ consecutive library frames collapsed by default, expand_stack parameter to override</li>
+            <li>Session-breakpoint cross-reference: session_list shows which breakpoint a paused session is at</li>
+            <li>Smarter session switch detection: terminated sessions auto-track the next session instead of blocking</li>
+            <li>Evaluate tool description clarifies frame #0 limitation (xdebug constraint)</li>
+            <li>Fix: circular reference false positives on arrays with size info (e.g. array[7])</li>
+            <li>Cleaner output: "Current breakpoints:" header on remove/partial-failure responses</li>
+            <li>Leaner evaluate output: removed redundant source position header</li>
+        </ul>
         <b>0.4.0</b>
         <ul>
             <li>New tool: breakpoint_add_exception — break on any PHP exception class by name</li>
@@ -60,9 +73,10 @@
 
         <b>Breakpoints</b> (work without an active debug session)
         <ul>
-            <li>list, add, update, remove</li>
+            <li>list, add, update, remove — with batch support (comma-separated)</li>
             <li>Exception breakpoints — pause on any PHP exception class</li>
             <li>Conditions, log expressions, suspend control</li>
+            <li>Method breakpoint detection — prevents wrong breakpoint type</li>
         </ul>
 
         <b>Session management</b>
@@ -75,7 +89,7 @@
         <ul>
             <li>Step over / into / out / continue</li>
             <li>Run to a specific line</li>
-            <li>Every step returns a snapshot: source context, variables, call stack</li>
+            <li>Every step returns a snapshot: source context, variables, call stack (library frames auto-collapsed)</li>
         </ul>
 
         <b>Inspection</b> (requires paused session)

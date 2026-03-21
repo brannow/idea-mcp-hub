@@ -83,22 +83,52 @@ internal fun handleBreakpointAdd(
     activeLocation: Pair<String, Int>? = null
 ): CallToolResult {
     if (location == null) return err("'location' is required")
-    val (file, line) = parseLocation(location)
-        ?: return err("Invalid location format. Expected file:line, e.g. \"src/index.php:15\"")
 
-    val result = service.addBreakpoint(file, line, condition, logExpression, suspend)
-    val text = StringBuilder(formatBreakpoint(result.breakpoint, activeLocation))
+    val locations = location.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
-    if (result.existingBreakpoints.isNotEmpty()) {
-        val loc = "${result.breakpoint.file}:${result.breakpoint.line}"
-        val allOnLine = result.existingBreakpoints + result.breakpoint
-        text.append("\n\n$loc (multi-breakpoint-line)")
-        for (bp in allOnLine) {
-            val extra = if (bp.id == result.breakpoint.id) "new" else null
-            text.append("\n - #${bp.id}${formatAddAnnotations(bp, extra, activeLocation)}")
+    // Single location — preserve original error format
+    if (locations.size == 1) {
+        val (file, line) = parseLocation(locations.first())
+            ?: return err("Invalid location format. Expected file:line, e.g. \"src/index.php:15\"")
+        val result = service.addBreakpoint(file, line, condition, logExpression, suspend)
+        val highlights = mapOf(result.breakpoint.id to "new")
+        val allLine = service.listBreakpoints()
+        val allException = service.listExceptionBreakpoints()
+        return ok(formatCombinedBreakpointList(allLine, allException, activeLocation, highlights))
+    }
+
+    // Multi-add
+    val highlights = mutableMapOf<String, String>()
+    val errors = mutableListOf<String>()
+
+    for (loc in locations) {
+        val parsed = parseLocation(loc)
+        if (parsed == null) {
+            errors.add("Invalid location: $loc")
+            continue
+        }
+        try {
+            val result = service.addBreakpoint(parsed.first, parsed.second, condition, logExpression, suspend)
+            highlights[result.breakpoint.id] = "new"
+        } catch (e: Exception) {
+            errors.add("${loc}: ${e.message}")
         }
     }
 
+    if (highlights.isEmpty() && errors.isNotEmpty()) {
+        return err(errors.joinToString("\n"))
+    }
+
+    val allLine = service.listBreakpoints()
+    val allException = service.listExceptionBreakpoints()
+    val text = StringBuilder()
+
+    if (errors.isNotEmpty()) {
+        text.append(errors.joinToString("\n"))
+        text.append("\n\nCurrent breakpoints:\n")
+    }
+
+    text.append(formatCombinedBreakpointList(allLine, allException, activeLocation, highlights))
     return ok(text.toString())
 }
 
@@ -114,14 +144,22 @@ internal fun handleBreakpointUpdate(
     if (id == null) return err("'id' is required")
     val hasChanges = enabled != null || condition != null || logExpression != null || suspend != null
 
+    val ids = id.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+
     return try {
         if (!hasChanges) {
-            // Validate the ID exists before complaining about missing changes
-            service.updateBreakpoint(id)
+            // Validate the first ID exists before complaining about missing changes
+            service.updateBreakpoint(ids.first())
             return err("No changes specified. Use enabled, condition, log_expression, or suspend to update.")
         }
-        val bp = service.updateBreakpoint(id, enabled, condition, logExpression, suspend)
-        ok(formatAnyBreakpoint(bp, activeLocation))
+        val highlights = mutableMapOf<String, String>()
+        for (singleId in ids) {
+            val bp = service.updateBreakpoint(singleId, enabled, condition, logExpression, suspend)
+            highlights[bp.id] = "updated"
+        }
+        val allLine = service.listBreakpoints()
+        val allException = service.listExceptionBreakpoints()
+        ok(formatCombinedBreakpointList(allLine, allException, activeLocation, highlights))
     } catch (e: AmbiguousBreakpointException) {
         ambiguousResponse(id, e.breakpoints, activeLocation)
     } catch (e: BreakpointNotFoundException) {
@@ -147,31 +185,24 @@ internal fun handleBreakpointRemove(
 
     val text = StringBuilder()
 
+    // Show what was removed
     if (result.removed.isNotEmpty()) {
-        text.append(formatAnyBreakpointList(result.removed, activeLocation))
-
-        val remainingLine = service.listBreakpoints()
-        val remainingException = service.listExceptionBreakpoints()
-        val remainingCount = remainingLine.size + remainingException.size
-        if (remainingCount > 0) {
-            text.append("\n\n$remainingCount breakpoint(s) remaining:\n${formatCombinedBreakpointIndex(remainingLine, remainingException, activeLocation)}")
-        }
+        val removedCount = result.removed.size
+        text.append("Removed $removedCount breakpoint(s)")
     }
 
+    // Show not-found errors
     if (result.notFound.isNotEmpty()) {
         if (text.isNotEmpty()) text.append("\n\n")
         val notFoundStr = result.notFound.joinToString(", ") { "'$it'" }
+        text.append("Breakpoint $notFoundStr not found")
+    }
 
-        val allLine = service.listBreakpoints()
-        val allException = service.listExceptionBreakpoints()
-        val allCount = allLine.size + allException.size
-        if (allCount == 0 && result.removed.isNotEmpty()) {
-            text.append("Breakpoint $notFoundStr not found")
-        } else if (allCount == 0) {
-            text.append("Breakpoint $notFoundStr not found, no breakpoints in project")
-        } else {
-            text.append("Breakpoint $notFoundStr not found, current breakpoints:\n\n${formatCombinedBreakpointIndex(allLine, allException, activeLocation)}")
-        }
+    // Show clean remaining list
+    val remainingLine = service.listBreakpoints()
+    val remainingException = service.listExceptionBreakpoints()
+    if (remainingLine.isNotEmpty() || remainingException.isNotEmpty()) {
+        text.append("\n\nCurrent breakpoints:\n${formatCombinedBreakpointList(remainingLine, remainingException, activeLocation)}")
     }
 
     // err() when nothing was removed (all IDs not found), ok() otherwise (including partial success)
@@ -190,7 +221,10 @@ internal fun handleBreakpointAddException(
 
     return try {
         val info = service.addExceptionBreakpoint(className, condition, logExpression, suspend)
-        ok(formatExceptionBreakpoint(info))
+        val highlights = mapOf(info.id to "new")
+        val allLine = service.listBreakpoints()
+        val allException = service.listExceptionBreakpoints()
+        ok(formatCombinedBreakpointList(allLine, allException, highlights = highlights))
     } catch (e: MultipleClassesFoundException) {
         val list = e.classes.joinToString("\n") { "  \\${it.fqcn}" }
         err("Multiple classes match '${e.query}':\n\n$list\n\nSpecify the full class name to disambiguate.")
@@ -239,7 +273,7 @@ fun Server.registerBreakpointTools(project: Project) {
     // --- breakpoint_add ---
     addTool(
         name = "breakpoint_add",
-        description = "Add a line breakpoint at a file:line location.",
+        description = "Add line breakpoint(s). Accepts comma-separated locations for batch add.",
         toolAnnotations = ToolAnnotations(
             readOnlyHint = false,
             destructiveHint = false,
@@ -250,7 +284,7 @@ fun Server.registerBreakpointTools(project: Project) {
             properties = buildJsonObject {
                 putJsonObject("location") {
                     put("type", "string")
-                    put("description", "File path and line, e.g. \"src/index.php:15\"")
+                    put("description", "File path and line, e.g. \"src/index.php:15\". Comma-separated for multiple.")
                 }
                 putJsonObject("condition") {
                     put("type", "string")
@@ -338,7 +372,8 @@ fun Server.registerBreakpointTools(project: Project) {
     // --- breakpoint_update ---
     addTool(
         name = "breakpoint_update",
-        description = "Modify an existing breakpoint. Only provided fields are changed.",
+        description = "Modify one or more breakpoints. Only provided fields are changed. " +
+                "Accepts comma-separated IDs for batch updates.",
         toolAnnotations = ToolAnnotations(
             readOnlyHint = false,
             destructiveHint = false,
@@ -349,7 +384,7 @@ fun Server.registerBreakpointTools(project: Project) {
             properties = buildJsonObject {
                 putJsonObject("id") {
                     put("type", "string")
-                    put("description", "Breakpoint #ID, file:line, or exception class FQCN")
+                    put("description", "Breakpoint #ID(s), file:line, file path, or exception class FQCN. Comma-separated for multiple.")
                 }
                 putJsonObject("enabled") {
                     put("type", "boolean")

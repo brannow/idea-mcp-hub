@@ -107,6 +107,7 @@ class BreakpointToolsTest {
             }
             override fun getLineCount(file: VirtualFile): Int = FILE_LINE_COUNT
             override fun isLibrary(file: VirtualFile): Boolean = file.path.contains("/vendor/")
+            override fun isMethodBreakpointLine(file: VirtualFile, line: Int): Boolean = false
             override fun <T> readAction(action: () -> T): T = action()
             override fun <T> runOnEdt(action: () -> T): T = action()
 
@@ -223,12 +224,16 @@ class BreakpointToolsTest {
         try {
             val result = handleBreakpointAdd(service, case.location, case.condition, case.logExpression, case.suspend)
             val text = resultText(result)
-            if (case.expectedPattern.contains("{ID}")) {
-                // Extract the generated ID from output and substitute
-                val idMatch = Regex("^#(\\d+)").find(text)
-                val actual = if (idMatch != null) {
-                    text.replace(idMatch.groupValues[1], "{ID}")
-                } else text
+            if (case.expectedPattern.contains("{ID")) {
+                // Replace all unknown IDs with {ID} placeholders ({ID1}, {ID2}, etc. for multi-add)
+                val knownIds = case.breakpoints.map { it.id.toString() }.toSet()
+                val allIds = Regex("#(\\d+)").findAll(text).map { it.groupValues[1] }.toList()
+                val newIds = allIds.filter { it !in knownIds }.distinct()
+                var actual = text
+                newIds.forEachIndexed { index, id ->
+                    val placeholder = if (newIds.size == 1) "{ID}" else "{ID${index + 1}}"
+                    actual = actual.replace(id, placeholder)
+                }
                 assertEquals(case.expectedPattern, actual)
             } else {
                 assertEquals(case.expectedPattern, text)
@@ -533,26 +538,25 @@ class BreakpointToolsTest {
                 isError = true,
             ),
 
-            // --- Successful add ---
+            // --- Successful add (returns full list with "new" highlight) ---
             AddCase(
                 name = "add to empty project",
                 breakpoints = emptyList(),
                 knownFiles = setOf("src/index.php"),
                 location = "src/index.php:15",
-                expectedPattern = "#{ID} src/index.php:15",
+                expectedPattern = "#{ID} src/index.php:15 (new)",
             ),
             AddCase(
                 name = "add to line with no existing breakpoints",
                 breakpoints = listOf(BP_INDEX_5),
                 location = "src/index.php:15",
-                expectedPattern = "#{ID} src/index.php:15",
+                expectedPattern = "#100 src/index.php:5\n#{ID} src/index.php:15 (new)",
             ),
             AddCase(
-                name = "add to line with existing breakpoints → context",
+                name = "add to line with existing breakpoints → grouped",
                 breakpoints = listOf(BP_WORLD_13, BP_WORLD_13_COND),
                 location = "src/WorldClass.php:13",
-                expectedPattern = "#{ID} src/WorldClass.php:13\n\n" +
-                    "src/WorldClass.php:13 (multi-breakpoint-line)\n" +
+                expectedPattern = "src/WorldClass.php:13 (multi-breakpoint-line)\n" +
                     " - #102\n" +
                     " - #103 (condition: \$foo === '')\n" +
                     " - #{ID} (new)",
@@ -563,7 +567,7 @@ class BreakpointToolsTest {
                 knownFiles = setOf("src/index.php"),
                 location = "src/index.php:15",
                 condition = "\$count > 10",
-                expectedPattern = "#{ID} src/index.php:15 (condition: \$count > 10)",
+                expectedPattern = "#{ID} src/index.php:15 (new, condition: \$count > 10)",
             ),
             AddCase(
                 name = "add with log expression",
@@ -571,7 +575,7 @@ class BreakpointToolsTest {
                 knownFiles = setOf("src/index.php"),
                 location = "src/index.php:15",
                 logExpression = "\$request->getUri()",
-                expectedPattern = "#{ID} src/index.php:15 (log: \$request->getUri())",
+                expectedPattern = "#{ID} src/index.php:15 (new, log: \$request->getUri())",
             ),
             AddCase(
                 name = "add with no suspend",
@@ -579,7 +583,7 @@ class BreakpointToolsTest {
                 knownFiles = setOf("src/index.php"),
                 location = "src/index.php:15",
                 suspend = false,
-                expectedPattern = "#{ID} src/index.php:15 (no suspend)",
+                expectedPattern = "#{ID} src/index.php:15 (new, no suspend)",
             ),
             AddCase(
                 name = "add with all options",
@@ -589,7 +593,44 @@ class BreakpointToolsTest {
                 condition = "\$x > 0",
                 logExpression = "\$x",
                 suspend = false,
-                expectedPattern = "#{ID} src/index.php:15 (condition: \$x > 0, log: \$x, no suspend)",
+                expectedPattern = "#{ID} src/index.php:15 (new, condition: \$x > 0, log: \$x, no suspend)",
+            ),
+
+            // --- Multi-add (comma-separated locations) ---
+            AddCase(
+                name = "multi-add two locations",
+                breakpoints = emptyList(),
+                knownFiles = setOf("src/index.php", "src/WorldClass.php"),
+                location = "src/index.php:15, src/WorldClass.php:13",
+                expectedPattern = "#{ID1} src/index.php:15 (new)\n#{ID2} src/WorldClass.php:13 (new)",
+            ),
+            AddCase(
+                name = "multi-add three locations same file",
+                breakpoints = emptyList(),
+                knownFiles = setOf("src/WorldClass.php"),
+                location = "src/WorldClass.php:22, src/WorldClass.php:17, src/WorldClass.php:15",
+                expectedPattern = "#{ID1} src/WorldClass.php:22 (new)\n#{ID2} src/WorldClass.php:17 (new)\n#{ID3} src/WorldClass.php:15 (new)",
+            ),
+            AddCase(
+                name = "multi-add with existing breakpoints",
+                breakpoints = listOf(BP_INDEX_5),
+                knownFiles = setOf("src/index.php", "src/WorldClass.php"),
+                location = "src/index.php:15, src/WorldClass.php:13",
+                expectedPattern = "#100 src/index.php:5\n#{ID1} src/index.php:15 (new)\n#{ID2} src/WorldClass.php:13 (new)",
+            ),
+            AddCase(
+                name = "multi-add partial failure",
+                breakpoints = emptyList(),
+                knownFiles = setOf("src/index.php"),
+                location = "src/index.php:15, src/nonExistent.php:10",
+                expectedPattern = "src/nonExistent.php:10: File not found: src/nonExistent.php\n\nCurrent breakpoints:\n#{ID} src/index.php:15 (new)",
+            ),
+            AddCase(
+                name = "multi-add all invalid",
+                breakpoints = emptyList(),
+                location = "invalid, also-invalid",
+                expectedPattern = "Invalid location: invalid\nInvalid location: also-invalid",
+                isError = true,
             ),
         )
 
@@ -653,7 +694,7 @@ class BreakpointToolsTest {
                 isError = true,
             ),
 
-            // --- Found by #ID ---
+            // --- Found by #ID (returns full list with "updated" highlight) ---
             UpdateCase(
                 name = "found by #ID, no changes → error",
                 breakpoints = listOf(BP_INDEX_5),
@@ -666,63 +707,63 @@ class BreakpointToolsTest {
                 breakpoints = listOf(BP_INDEX_5),
                 id = "100",
                 enabled = true,
-                expectedOutput = "#100 src/index.php:5",
+                expectedOutput = "#100 src/index.php:5 (updated)",
             ),
             UpdateCase(
                 name = "disable breakpoint",
                 breakpoints = listOf(BP_INDEX_5),
                 id = "#100",
                 enabled = false,
-                expectedOutput = "#100 src/index.php:5 (disabled)",
+                expectedOutput = "#100 src/index.php:5 (updated, disabled)",
             ),
             UpdateCase(
                 name = "enable disabled breakpoint",
                 breakpoints = listOf(BP_WORLD_13_DISABLED),
                 id = "#104",
                 enabled = true,
-                expectedOutput = "#104 src/WorldClass.php:13",
+                expectedOutput = "#104 src/WorldClass.php:13 (updated)",
             ),
             UpdateCase(
                 name = "set condition",
                 breakpoints = listOf(BP_INDEX_5),
                 id = "#100",
                 condition = "\$count > 10",
-                expectedOutput = "#100 src/index.php:5 (condition: \$count > 10)",
+                expectedOutput = "#100 src/index.php:5 (updated, condition: \$count > 10)",
             ),
             UpdateCase(
                 name = "clear condition (empty string)",
                 breakpoints = listOf(BP_WORLD_13_COND),
                 id = "#103",
                 condition = "",
-                expectedOutput = "#103 src/WorldClass.php:13",
+                expectedOutput = "#103 src/WorldClass.php:13 (updated)",
             ),
             UpdateCase(
                 name = "set log expression",
                 breakpoints = listOf(BP_INDEX_5),
                 id = "#100",
                 logExpression = "\$request",
-                expectedOutput = "#100 src/index.php:5 (log: \$request)",
+                expectedOutput = "#100 src/index.php:5 (updated, log: \$request)",
             ),
             UpdateCase(
                 name = "clear log expression",
                 breakpoints = listOf(BP_LOG),
                 id = "#107",
                 logExpression = "",
-                expectedOutput = "#107 src/index.php:15",
+                expectedOutput = "#107 src/index.php:15 (updated)",
             ),
             UpdateCase(
                 name = "set no-suspend",
                 breakpoints = listOf(BP_INDEX_5),
                 id = "#100",
                 suspend = false,
-                expectedOutput = "#100 src/index.php:5 (no suspend)",
+                expectedOutput = "#100 src/index.php:5 (updated, no suspend)",
             ),
             UpdateCase(
                 name = "restore suspend",
                 breakpoints = listOf(BP_NO_SUSPEND),
                 id = "#108",
                 suspend = true,
-                expectedOutput = "#108 src/index.php:20",
+                expectedOutput = "#108 src/index.php:20 (updated)",
             ),
 
             // --- Found by file:line ---
@@ -731,7 +772,26 @@ class BreakpointToolsTest {
                 breakpoints = listOf(BP_INDEX_5),
                 id = "src/index.php:5",
                 enabled = false,
-                expectedOutput = "#100 src/index.php:5 (disabled)",
+                expectedOutput = "#100 src/index.php:5 (updated, disabled)",
+            ),
+
+            // --- Batch update (comma-separated IDs) ---
+            UpdateCase(
+                name = "batch disable two breakpoints",
+                breakpoints = listOf(BP_INDEX_5, BP_INDEX_10, BP_WORLD_13),
+                id = "#100, #101",
+                enabled = false,
+                expectedOutput = "#100 src/index.php:5 (updated, disabled)\n" +
+                    "#101 src/index.php:10 (updated, disabled)\n" +
+                    "#102 src/WorldClass.php:13",
+            ),
+            UpdateCase(
+                name = "batch set condition",
+                breakpoints = listOf(BP_INDEX_5, BP_WORLD_13),
+                id = "#100, #102",
+                condition = "\$debug",
+                expectedOutput = "#100 src/index.php:5 (updated, condition: \$debug)\n" +
+                    "#102 src/WorldClass.php:13 (updated, condition: \$debug)",
             ),
 
             // --- Ambiguous file:line ---
@@ -774,7 +834,7 @@ class BreakpointToolsTest {
                 name = "all=true, has breakpoints",
                 breakpoints = listOf(BP_INDEX_5, BP_WORLD_13),
                 all = true,
-                expectedOutput = "#100 src/index.php:5\n#102 src/WorldClass.php:13",
+                expectedOutput = "Removed 2 breakpoint(s)",
             ),
 
             // --- Remove by #ID ---
@@ -782,19 +842,19 @@ class BreakpointToolsTest {
                 name = "by #ID, only breakpoint",
                 breakpoints = listOf(BP_INDEX_5),
                 ids = listOf("#100"),
-                expectedOutput = "#100 src/index.php:5",
+                expectedOutput = "Removed 1 breakpoint(s)",
             ),
             RemoveCase(
                 name = "by ID without hash",
                 breakpoints = listOf(BP_INDEX_5),
                 ids = listOf("100"),
-                expectedOutput = "#100 src/index.php:5",
+                expectedOutput = "Removed 1 breakpoint(s)",
             ),
             RemoveCase(
                 name = "by #ID, others remain",
                 breakpoints = listOf(BP_INDEX_5, BP_WORLD_13),
                 ids = listOf("#100"),
-                expectedOutput = "#100 src/index.php:5\n\n1 breakpoint(s) remaining:\n#102 src/WorldClass.php:13",
+                expectedOutput = "Removed 1 breakpoint(s)\n\nCurrent breakpoints:\n#102 src/WorldClass.php:13",
             ),
 
             // --- Remove by file:line ---
@@ -802,7 +862,7 @@ class BreakpointToolsTest {
                 name = "by file:line, unique",
                 breakpoints = listOf(BP_INDEX_5, BP_WORLD_13),
                 ids = listOf("src/index.php:5"),
-                expectedOutput = "#100 src/index.php:5\n\n1 breakpoint(s) remaining:\n#102 src/WorldClass.php:13",
+                expectedOutput = "Removed 1 breakpoint(s)\n\nCurrent breakpoints:\n#102 src/WorldClass.php:13",
             ),
 
             // --- Remove by file path (purge) ---
@@ -810,7 +870,7 @@ class BreakpointToolsTest {
                 name = "by file path, purges all in file",
                 breakpoints = listOf(BP_INDEX_5, BP_INDEX_10, BP_WORLD_13),
                 ids = listOf("src/index.php"),
-                expectedOutput = "#100 src/index.php:5\n#101 src/index.php:10\n\n1 breakpoint(s) remaining:\n#102 src/WorldClass.php:13",
+                expectedOutput = "Removed 2 breakpoint(s)\n\nCurrent breakpoints:\n#102 src/WorldClass.php:13",
             ),
 
             // --- Not found ---
@@ -818,21 +878,21 @@ class BreakpointToolsTest {
                 name = "not found #ID, empty project",
                 breakpoints = emptyList(),
                 ids = listOf("#999"),
-                expectedOutput = "Breakpoint '#999' not found, no breakpoints in project",
+                expectedOutput = "Breakpoint '#999' not found",
                 isError = true,
             ),
             RemoveCase(
                 name = "not found #ID, has breakpoints → shows current",
                 breakpoints = listOf(BP_INDEX_5),
                 ids = listOf("#999"),
-                expectedOutput = "Breakpoint '#999' not found, current breakpoints:\n\n#100 src/index.php:5",
+                expectedOutput = "Breakpoint '#999' not found\n\nCurrent breakpoints:\n#100 src/index.php:5",
                 isError = true,
             ),
             RemoveCase(
                 name = "not found by substring, has matching breakpoints → shows matching",
                 breakpoints = listOf(BP_INDEX_5, BP_WORLD_13),
                 ids = listOf("#999"),
-                expectedOutput = "Breakpoint '#999' not found, current breakpoints:\n\n" +
+                expectedOutput = "Breakpoint '#999' not found\n\nCurrent breakpoints:\n" +
                     "#100 src/index.php:5\n#102 src/WorldClass.php:13",
                 isError = true,
             ),
@@ -842,8 +902,8 @@ class BreakpointToolsTest {
                 name = "partial: one found, one not found",
                 breakpoints = listOf(BP_INDEX_5, BP_WORLD_13),
                 ids = listOf("#100", "#999"),
-                expectedOutput = "#100 src/index.php:5\n\n1 breakpoint(s) remaining:\n#102 src/WorldClass.php:13\n\n" +
-                    "Breakpoint '#999' not found, current breakpoints:\n\n#102 src/WorldClass.php:13",
+                expectedOutput = "Removed 1 breakpoint(s)\n\n" +
+                    "Breakpoint '#999' not found\n\nCurrent breakpoints:\n#102 src/WorldClass.php:13",
             ),
 
             // --- Comma-separated multiple ---
@@ -851,7 +911,7 @@ class BreakpointToolsTest {
                 name = "multiple IDs comma-separated",
                 breakpoints = listOf(BP_INDEX_5, BP_INDEX_10, BP_WORLD_13),
                 ids = listOf("#100", "#101"),
-                expectedOutput = "#100 src/index.php:5\n#101 src/index.php:10\n\n1 breakpoint(s) remaining:\n#102 src/WorldClass.php:13",
+                expectedOutput = "Removed 2 breakpoint(s)\n\nCurrent breakpoints:\n#102 src/WorldClass.php:13",
             ),
 
             // --- Ambiguous file:line ---
@@ -871,7 +931,7 @@ class BreakpointToolsTest {
                 name = "remove vendor breakpoint by ID",
                 breakpoints = listOf(BP_VENDOR, BP_INDEX_5),
                 ids = listOf("#105"),
-                expectedOutput = "#105 vendor/lib/Helper.php:8 (vendor)\n\n1 breakpoint(s) remaining:\n#100 src/index.php:5",
+                expectedOutput = "Removed 1 breakpoint(s)\n\nCurrent breakpoints:\n#100 src/index.php:5",
             ),
 
             // --- Method breakpoint ---
@@ -879,7 +939,7 @@ class BreakpointToolsTest {
                 name = "remove method breakpoint by ID",
                 breakpoints = listOf(BP_METHOD, BP_INDEX_5),
                 ids = listOf("#106"),
-                expectedOutput = "#106 src/Service.php:20 (method)\n\n1 breakpoint(s) remaining:\n#100 src/index.php:5",
+                expectedOutput = "Removed 1 breakpoint(s)\n\nCurrent breakpoints:\n#100 src/index.php:5",
             ),
         )
     }

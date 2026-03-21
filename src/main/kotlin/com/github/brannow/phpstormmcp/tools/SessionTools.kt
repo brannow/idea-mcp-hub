@@ -11,12 +11,12 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
-internal fun handleSessionList(service: SessionService): CallToolResult {
+internal fun handleSessionList(service: SessionService, breakpoints: List<BreakpointInfo> = emptyList()): CallToolResult {
     val sessions = service.listSessions()
     return if (sessions.isEmpty()) {
         ok("No sessions in project")
     } else {
-        ok(formatSessionList(sessions))
+        ok(formatSessionList(sessions, breakpoints))
     }
 }
 
@@ -65,6 +65,7 @@ internal fun handleSessionActivate(service: SessionService, sessionId: String): 
 
 fun Server.registerSessionTools(project: Project) {
     val service = SessionService.getInstance(project)
+    val breakpointService = BreakpointService.getInstance(project)
     val activityLog = McpActivityLog.getInstance(project)
 
     // --- session_list ---
@@ -84,7 +85,7 @@ fun Server.registerSessionTools(project: Project) {
     ) { _ ->
         activityLog.log("session_list")
         try {
-            handleSessionList(service)
+            handleSessionList(service, breakpointService.listBreakpoints())
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }

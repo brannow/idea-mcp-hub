@@ -357,9 +357,11 @@ class VariableService(private val project: Project) {
         /**
          * Returns true if the type represents a PHP object (class name) rather than
          * a scalar or array. Object types are tracked for circular reference detection.
+         * Uses prefix matching because xdebug appends size info (e.g. "array[7]", "string[25]").
          */
         internal fun isObjectType(type: String): Boolean {
-            return type.lowercase() !in NON_OBJECT_TYPES
+            val lower = type.lowercase()
+            return NON_OBJECT_TYPES.none { lower.startsWith(it) }
         }
 
         fun getInstance(project: Project): VariableService =

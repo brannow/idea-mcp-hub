@@ -43,13 +43,14 @@ class StackFrameServiceTest {
         val name: String,
         val frames: List<FrameInfo>,
         val activeDepth: Int = 0,
+        val collapseLibrary: Boolean = true,
         val expected: String,
     )
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("formatCases")
     fun `formatStackTrace`(case: FormatCase) {
-        assertEquals(case.expected, formatStackTrace(case.frames, case.activeDepth))
+        assertEquals(case.expected, formatStackTrace(case.frames, case.activeDepth, case.collapseLibrary))
     }
 
     // -- Infrastructure --
@@ -248,7 +249,7 @@ class StackFrameServiceTest {
                 expected = "→#0 eval at (unknown)"
             ),
             FormatCase(
-                name = "mixed project and library frames",
+                name = "2 library frames — not collapsed (below threshold)",
                 frames = listOf(
                     FrameInfo(0, "vendor/acme/lib/src/Foo.php", 42, "Foo->bar()", isLibrary = true),
                     FrameInfo(1, "vendor/acme/lib/src/Factory.php", 15, "Factory->create()", isLibrary = true),
@@ -259,6 +260,71 @@ class StackFrameServiceTest {
                         " #1 Factory->create() at vendor/acme/lib/src/Factory.php:15 (library)\n" +
                         " #2 WorldClass->fooBar() at src/WorldClass.php:20\n" +
                         " #3 {main} at src/index.php:8"
+            ),
+            FormatCase(
+                name = "3+ consecutive library frames — collapsed",
+                frames = listOf(
+                    FrameInfo(0, "src/Controller.php", 10, "Controller->handle()"),
+                    FrameInfo(1, "vendor/fw/Middleware.php", 20, "Middleware->process()", isLibrary = true),
+                    FrameInfo(2, "vendor/fw/Dispatcher.php", 30, "Dispatcher->handle()", isLibrary = true),
+                    FrameInfo(3, "vendor/fw/Router.php", 40, "Router->dispatch()", isLibrary = true),
+                    FrameInfo(4, "vendor/fw/Kernel.php", 50, "Kernel->run()", isLibrary = true),
+                    FrameInfo(5, "src/index.php", 5, "{main}"),
+                ),
+                expected = "→#0 Controller->handle() at src/Controller.php:10\n" +
+                        " #1-#4 [4 library frames]\n" +
+                        " #5 {main} at src/index.php:5"
+            ),
+            FormatCase(
+                name = "library frames with active frame in middle — not collapsed",
+                frames = listOf(
+                    FrameInfo(0, "src/Controller.php", 10, "Controller->handle()"),
+                    FrameInfo(1, "vendor/fw/Middleware.php", 20, "Middleware->process()", isLibrary = true),
+                    FrameInfo(2, "vendor/fw/Dispatcher.php", 30, "Dispatcher->handle()", isLibrary = true),
+                    FrameInfo(3, "vendor/fw/Router.php", 40, "Router->dispatch()", isLibrary = true),
+                    FrameInfo(4, "src/index.php", 5, "{main}"),
+                ),
+                activeDepth = 2,
+                expected = " #0 Controller->handle() at src/Controller.php:10\n" +
+                        " #1 Middleware->process() at vendor/fw/Middleware.php:20 (library)\n" +
+                        "→#2 Dispatcher->handle() at vendor/fw/Dispatcher.php:30 (library)\n" +
+                        " #3 Router->dispatch() at vendor/fw/Router.php:40 (library)\n" +
+                        " #4 {main} at src/index.php:5"
+            ),
+            FormatCase(
+                name = "expand_stack disables collapsing",
+                frames = listOf(
+                    FrameInfo(0, "src/Controller.php", 10, "Controller->handle()"),
+                    FrameInfo(1, "vendor/fw/Middleware.php", 20, "Middleware->process()", isLibrary = true),
+                    FrameInfo(2, "vendor/fw/Dispatcher.php", 30, "Dispatcher->handle()", isLibrary = true),
+                    FrameInfo(3, "vendor/fw/Router.php", 40, "Router->dispatch()", isLibrary = true),
+                    FrameInfo(4, "src/index.php", 5, "{main}"),
+                ),
+                collapseLibrary = false,
+                expected = "→#0 Controller->handle() at src/Controller.php:10\n" +
+                        " #1 Middleware->process() at vendor/fw/Middleware.php:20 (library)\n" +
+                        " #2 Dispatcher->handle() at vendor/fw/Dispatcher.php:30 (library)\n" +
+                        " #3 Router->dispatch() at vendor/fw/Router.php:40 (library)\n" +
+                        " #4 {main} at src/index.php:5"
+            ),
+            FormatCase(
+                name = "multiple collapsed groups",
+                frames = listOf(
+                    FrameInfo(0, "src/Controller.php", 10, "Controller->handle()"),
+                    FrameInfo(1, "vendor/fw/A.php", 20, "A->run()", isLibrary = true),
+                    FrameInfo(2, "vendor/fw/B.php", 30, "B->run()", isLibrary = true),
+                    FrameInfo(3, "vendor/fw/C.php", 40, "C->run()", isLibrary = true),
+                    FrameInfo(4, "src/Service.php", 50, "Service->process()"),
+                    FrameInfo(5, "vendor/fw/D.php", 60, "D->run()", isLibrary = true),
+                    FrameInfo(6, "vendor/fw/E.php", 70, "E->run()", isLibrary = true),
+                    FrameInfo(7, "vendor/fw/F.php", 80, "F->run()", isLibrary = true),
+                    FrameInfo(8, "src/index.php", 5, "{main}"),
+                ),
+                expected = "→#0 Controller->handle() at src/Controller.php:10\n" +
+                        " #1-#3 [3 library frames]\n" +
+                        " #4 Service->process() at src/Service.php:50\n" +
+                        " #5-#7 [3 library frames]\n" +
+                        " #8 {main} at src/index.php:5"
             ),
         )
     }

@@ -117,6 +117,17 @@ class SessionToolsTest {
         assertEquals(case.isError, result.isError ?: false)
     }
 
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("sessionListWithBreakpointsCases")
+    fun `session_list with breakpoint cross-reference`(case: Case) {
+        val service = buildService(case.sessions)
+        val breakpoints = listOf(
+            BreakpointInfo("100", "src/index.php", 5, true, null, null, true, false, false)
+        )
+        val result = handleSessionList(service, breakpoints)
+        assertEquals(case.expectedOutput, resultText(result))
+    }
+
     // ========================================================================
     // session_stop
     // ========================================================================
@@ -201,6 +212,26 @@ class SessionToolsTest {
                     SessionState("222", "old.php", stopped = true),
                 ),
                 expectedOutput = "#111 \"index.php\" at src/index.php:5 (active)",
+            ),
+        )
+
+        // -- session_list with breakpoint cross-reference cases --
+
+        @JvmStatic
+        fun sessionListWithBreakpointsCases() = listOf(
+            Case(
+                name = "paused at breakpoint → shows breakpoint ID",
+                sessions = listOf(
+                    SessionState("111", "index.php", suspended = true, file = "src/index.php", line = 5, active = true)
+                ),
+                expectedOutput = "#111 \"index.php\" at src/index.php:5 (breakpoint #100) (active)",
+            ),
+            Case(
+                name = "paused at line without breakpoint → no hint",
+                sessions = listOf(
+                    SessionState("111", "index.php", suspended = true, file = "src/index.php", line = 99, active = true)
+                ),
+                expectedOutput = "#111 \"index.php\" at src/index.php:99 (active)",
             ),
         )
 
