@@ -279,7 +279,8 @@ fun formatSnapshot(
     variables: List<VariableInfo>?,
     frames: List<FrameInfo>?,
     activeDepth: Int = 0,
-    collapseLibrary: Boolean = true
+    collapseLibrary: Boolean = true,
+    hiddenGlobalCount: Int = 0
 ): String {
     val sections = mutableListOf<String>()
 
@@ -295,7 +296,7 @@ fun formatSnapshot(
 
     // Variables
     if (variables != null) {
-        sections.add(formatVariables(variables))
+        sections.add(formatVariables(variables, hiddenGlobalCount))
     }
 
     // Stack trace
@@ -335,16 +336,24 @@ private val PHP_SUPERGLOBALS = setOf(
     "\$_COOKIE", "\$_FILES", "\$_REQUEST", "\$GLOBALS"
 )
 
-fun filterGlobals(variables: List<VariableInfo>, includeGlobals: Boolean): List<VariableInfo> {
-    if (includeGlobals) return variables
-    return variables.filter { v ->
+data class FilteredVariables(val variables: List<VariableInfo>, val hiddenGlobalCount: Int)
+
+fun filterGlobals(variables: List<VariableInfo>, includeGlobals: Boolean): FilteredVariables {
+    if (includeGlobals) return FilteredVariables(variables, 0)
+    val filtered = variables.filter { v ->
         val name = if (v.name.startsWith("$")) v.name else "$${v.name}"
         name !in PHP_SUPERGLOBALS
     }
+    return FilteredVariables(filtered, variables.size - filtered.size)
 }
 
-fun formatVariables(variables: List<VariableInfo>): String {
-    if (variables.isEmpty()) return "(no variables)"
+fun formatVariables(variables: List<VariableInfo>, hiddenGlobalCount: Int = 0): String {
+    if (variables.isEmpty()) {
+        if (hiddenGlobalCount > 0) {
+            return "(no local variables — $hiddenGlobalCount global${if (hiddenGlobalCount > 1) "s" else ""} hidden, use globals: true to include)"
+        }
+        return "(no variables)"
+    }
     return variables.joinToString("\n") { formatVariable(it) }
 }
 

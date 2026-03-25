@@ -9,6 +9,7 @@ import com.intellij.xdebugger.XDebugSessionListener
 import com.intellij.xdebugger.XDebuggerUtil
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolAnnotations
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.serialization.json.*
@@ -76,12 +77,12 @@ internal fun buildSnapshotFromResult(
                 it.id == System.identityHashCode(session).toString()
             }
             val source = if (includeSource) extractSourceContext(session, sourceService) else null
-            val variables = if (includeVars) {
+            val filtered = if (includeVars) {
                 extractVariables(session, variableService)?.let { filterGlobals(it, includeGlobals) }
             } else null
             val frames = if (includeStack) extractStackFrames(session, stackFrameService) else null
 
-            ok(formatSnapshot(sessionInfo, source, variables, frames, collapseLibrary = !expandStack))
+            ok(formatSnapshot(sessionInfo, source, filtered?.variables, frames, collapseLibrary = !expandStack, hiddenGlobalCount = filtered?.hiddenGlobalCount ?: 0))
         }
     }
 }
@@ -246,11 +247,31 @@ fun Server.registerNavigationTools(project: Project) {
 
             val result = stepAndWait(session!!) { session.runToPosition(position, false) }
 
-            withSessionNotice(buildSnapshotFromResult(
+            val snapshot = buildSnapshotFromResult(
                 result, session, sessionService, sourceService, variableService, stackFrameService,
                 params.includeSource, params.includeVars, params.includeStack, params.includeGlobals,
                 params.expandStack
-            ))
+            )
+
+            // Detect if we stopped before the requested line (e.g. intermediate breakpoint)
+            val currentPos = session.currentPosition
+            val stoppedEarly = currentPos != null && (
+                currentPos.file.path != file.path || (currentPos.line + 1) != line
+            )
+            if (stoppedEarly && snapshot.isError != true) {
+                val first = snapshot.content.firstOrNull()
+                if (first is TextContent) {
+                    val notice = "Did not reach $location — stopped at an intermediate breakpoint. Use breakpoint_list to see all active breakpoints, or call debug_run_to_line with the same target again to continue."
+                    withSessionNotice(CallToolResult(
+                        content = listOf(TextContent("$notice\n\n${first.text}")) + snapshot.content.drop(1),
+                        isError = snapshot.isError
+                    ))
+                } else {
+                    withSessionNotice(snapshot)
+                }
+            } else {
+                withSessionNotice(snapshot)
+            }
         } catch (e: ProcessCanceledException) {
             throw e
         } catch (e: Exception) {

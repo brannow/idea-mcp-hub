@@ -3,11 +3,13 @@
     <name>MCP Control</name>
     <vendor url="https://github.com/brannow/idea-mcp-control">Benjamin Rannow</vendor>
     <change-notes><![CDATA[
-        <b>0.5.2</b>
+        <b>0.6.0</b>
         <ul>
+            <li>Smarter variable hint: when globals are filtered and no local variables remain, the agent is told how many globals are hidden and how to include them</li>
+            <li>debug_run_to_line now detects intermediate breakpoint stops and tells the agent it didn't reach the target line</li>
+            <li>Session termination notice: when the previous session dies and a new one takes over, the agent is informed instead of silently switching</li>
             <li>Removed session_activate tool — session switching is a UI concern handled by the IDE, not an agent action</li>
             <li>Removed all internal API usage (XDebugSessionImpl) for JetBrains Marketplace compatibility</li>
-            <li>Session switch detection now informs the agent instead of blocking (guides to ask user to switch tabs)</li>
         </ul>
         <b>0.5.1</b>
         <ul>

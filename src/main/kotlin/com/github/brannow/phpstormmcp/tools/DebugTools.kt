@@ -107,7 +107,7 @@ internal fun resolveActiveSession(project: Project): Pair<XDebugSession?, CallTo
         if (alive.isEmpty()) {
             return null to err("No debug session")
         }
-        return null to err("Session ended. Other sessions:\n\n${formatSessionList(alive)}\n\nThe IDE will auto-focus a remaining session. Call your tool again.")
+        return null to err("Session ended. Other sessions:\n\n${formatSessionList(alive)}\n\nThe IDE does not auto-activate a remaining session. Ask the user to select the desired session in the IDE's Debug tool window, then call your tool again.")
     }
 
     // Check for unexpected session switch
@@ -129,8 +129,10 @@ internal fun resolveActiveSession(project: Project): Pair<XDebugSession?, CallTo
             ) { status }
             // Notice is stored on AgentSessionTracker.pendingNotice,
             // consumed by withSessionNotice() in the tool handler
+        } else {
+            // Previous session terminated — let the agent know
+            AgentSessionTracker.pendingNotice = "Note: Previous session #$lastId terminated. Now using session #$currentId \"${session.sessionName}\"."
         }
-        // Previous terminated or not found — auto-track silently
     }
 
     AgentSessionTracker.track(session)
@@ -363,12 +365,12 @@ fun Server.registerDebugTools(project: Project) {
             }
 
             val source = if (includeSource) extractSourceContext(session, sourceService) else null
-            val variables = if (includeVars) {
+            val filtered = if (includeVars) {
                 extractVariables(session, variableService)?.let { filterGlobals(it, includeGlobals) }
             } else null
             val frames = if (includeStack) extractStackFrames(session, stackFrameService) else null
 
-            withSessionNotice(ok(formatSnapshot(sessionInfo, source, variables, frames, activeDepth = frameIndex, collapseLibrary = !expandStack)))
+            withSessionNotice(ok(formatSnapshot(sessionInfo, source, filtered?.variables, frames, activeDepth = frameIndex, collapseLibrary = !expandStack, hiddenGlobalCount = filtered?.hiddenGlobalCount ?: 0)))
         } catch (e: ProcessCanceledException) {
             throw e
         } catch (e: Exception) {
@@ -492,12 +494,12 @@ fun Server.registerDebugTools(project: Project) {
             }
 
             val source = if (includeSource) extractSourceContext(session!!, sourceService) else null
-            val variables = if (includeVars) {
+            val filtered = if (includeVars) {
                 extractVariables(session!!, variableService)?.let { filterGlobals(it, includeGlobals) }
             } else null
             val frames = if (includeStack) extractStackFrames(session!!, stackFrameService) else null
 
-            withSessionNotice(ok(formatSnapshot(sessionInfo, source, variables, frames, collapseLibrary = !expandStack)))
+            withSessionNotice(ok(formatSnapshot(sessionInfo, source, filtered?.variables, frames, collapseLibrary = !expandStack, hiddenGlobalCount = filtered?.hiddenGlobalCount ?: 0)))
         } catch (e: ProcessCanceledException) {
             throw e
         } catch (e: Exception) {
