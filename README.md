@@ -12,7 +12,7 @@
   <a href="https://github.com/brannow/idea-mcp-control/actions/workflows/test.yml"><img src="https://github.com/brannow/idea-mcp-control/actions/workflows/test.yml/badge.svg" alt="Test"></a>
   <a href="https://github.com/brannow/idea-mcp-control/releases/latest"><img src="https://img.shields.io/github/v/release/brannow/idea-mcp-control?label=release" alt="Release"></a>
   <img src="https://img.shields.io/badge/platform-PhpStorm%202025.3+-purple" alt="Platform">
-  <img src="https://img.shields.io/badge/MCP%20tools-15-blue" alt="MCP Tools">
+  <img src="https://img.shields.io/badge/MCP%20tools-14-blue" alt="MCP Tools">
   <a href="https://github.com/brannow/idea-mcp-control/blob/main/LICENSE"><img src="https://img.shields.io/github/license/brannow/idea-mcp-control" alt="License"></a>
 </p>
 
@@ -46,7 +46,7 @@ If the port is already in use (e.g., another PhpStorm instance), you get a notif
 
 ## Tools
 
-15 tools across 4 categories. All debug tools operate on the active session. Use `session_activate` to switch.
+14 tools across 4 categories. All debug tools operate on the active session (the one focused in the IDE's debug panel).
 
 ### Breakpoints (work without a debug session)
 
@@ -64,7 +64,6 @@ If the port is already in use (e.g., another PhpStorm instance), you get a notif
 |---|---|
 | `session_list` | List active debug sessions with position and status |
 | `session_stop` | Stop the active session or all sessions |
-| `session_activate` | Switch which session is active (like clicking a debug tab) |
 
 ### Navigation (requires paused session)
 

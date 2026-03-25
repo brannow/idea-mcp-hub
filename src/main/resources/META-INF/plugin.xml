@@ -3,6 +3,12 @@
     <name>MCP Control</name>
     <vendor url="https://github.com/brannow/idea-mcp-control">Benjamin Rannow</vendor>
     <change-notes><![CDATA[
+        <b>0.5.2</b>
+        <ul>
+            <li>Removed session_activate tool — session switching is a UI concern handled by the IDE, not an agent action</li>
+            <li>Removed all internal API usage (XDebugSessionImpl) for JetBrains Marketplace compatibility</li>
+            <li>Session switch detection now informs the agent instead of blocking (guides to ask user to switch tabs)</li>
+        </ul>
         <b>0.5.1</b>
         <ul>
             <li>Extended IDE version compatibility (2025.3 – 2026.1)</li>
@@ -73,7 +79,7 @@
         They can't set breakpoints, step through code, or inspect variables.
         MCP Control exposes these IDE-only capabilities as MCP tools.</p>
 
-        <h3>15 tools across 4 categories</h3>
+        <h3>14 tools across 4 categories</h3>
 
         <b>Breakpoints</b> (work without an active debug session)
         <ul>
@@ -86,7 +92,7 @@
         <b>Session management</b>
         <ul>
             <li>List active debug sessions, stop one or all</li>
-            <li>Switch active session (all debug tools operate on the active session)</li>
+            <li>Automatic session tracking with switch detection</li>
         </ul>
 
         <b>Navigation</b> (requires paused session)

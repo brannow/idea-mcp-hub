@@ -37,7 +37,7 @@ internal fun handleSessionStop(service: SessionService, all: Boolean): CallToolR
 
     val info = service.stopSmart(null)
     val remaining = service.listSessions()
-    // Track the auto-activated session so the agent can use debug tools immediately
+    // Track the IDE's auto-focused session so the agent can use debug tools immediately
     val activeRemaining = remaining.firstOrNull { it.active }
     if (activeRemaining != null) {
         AgentSessionTracker.trackById(activeRemaining.id)
@@ -48,18 +48,6 @@ internal fun handleSessionStop(service: SessionService, all: Boolean): CallToolR
         ok(formatSession(info))
     } else {
         ok("${formatSession(info)}\n\n${remaining.size} session(s) remaining:\n${formatSessionList(remaining)}")
-    }
-}
-
-internal fun handleSessionActivate(service: SessionService, sessionId: String): CallToolResult {
-    val info = service.activateSession(sessionId)
-    // Update tracker so resolvePausedSession accepts this session
-    AgentSessionTracker.trackById(info.id)
-    val sessions = service.listSessions()
-    return if (sessions.size <= 1) {
-        ok(formatSession(info))
-    } else {
-        ok("${formatSession(info)}\n\n${formatSessionList(sessions)}")
     }
 }
 
@@ -123,42 +111,4 @@ fun Server.registerSessionTools(project: Project) {
         }
     }
 
-    // --- session_activate ---
-    addTool(
-        name = "session_activate",
-        description = "Switch the active debug session. All debug tools operate on the active session. " +
-                "Use session_list to see available sessions and which one is active.",
-        toolAnnotations = ToolAnnotations(
-            readOnlyHint = false,
-            destructiveHint = false,
-            idempotentHint = false,
-            openWorldHint = false,
-        ),
-        inputSchema = ToolSchema(
-            properties = buildJsonObject {
-                putJsonObject("session_id") {
-                    put("type", "string")
-                    put("description", "ID of the session to activate (from session_list).")
-                }
-            },
-            required = listOf("session_id")
-        )
-    ) { request ->
-        val sessionId = request.arguments?.get("session_id")?.jsonPrimitive?.content
-            ?: return@addTool err("Missing required parameter: session_id")
-
-        activityLog.log("session_activate ($sessionId)")
-
-        try {
-            handleSessionActivate(service, sessionId)
-        } catch (e: SessionNotFoundException) {
-            if (e.activeSessions.isEmpty()) {
-                err("Session '${e.requestedId}' not found, no sessions in project")
-            } else {
-                err("Session '${e.requestedId}' not found, current sessions:\n\n${formatSessionList(e.activeSessions)}")
-            }
-        } catch (e: Exception) {
-            err(e.message ?: "Unknown error")
-        }
-    }
 }

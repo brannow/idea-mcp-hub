@@ -20,7 +20,7 @@ phpstorm-mcp/
 │   │   ├── 04-mcp-sdk/                                 # MCP Kotlin/Java SDK overviews
 │   │   └── ...                                         # See INDEX.md for full list
 │   ├── tools/                                          # Tool design specifications
-│   │   └── ToolDesign.md                               # Final tool specs (16 tools, snapshot concept)
+│   │   └── ToolDesign.md                               # Final tool specs (14 tools, snapshot concept)
 │   └── reference-Repository/                           # Cloned reference repos
 │       ├── intellij-community/                         # IntelliJ Platform source (xdebugger-api, xdebugger-impl)
 │       ├── intellij-sdk-code-samples/                  # Official plugin examples

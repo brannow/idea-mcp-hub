@@ -186,11 +186,11 @@ fun Server.registerNavigationTools(project: Project) {
                 else -> return@addTool err("Unknown action: $action. Use: over, into, out, continue")
             }
 
-            buildSnapshotFromResult(
+            withSessionNotice(buildSnapshotFromResult(
                 result, session!!, sessionService, sourceService, variableService, stackFrameService,
                 params.includeSource, params.includeVars, params.includeStack, params.includeGlobals,
                 params.expandStack
-            )
+            ))
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }
@@ -243,11 +243,11 @@ fun Server.registerNavigationTools(project: Project) {
 
             val result = stepAndWait(session!!) { session.runToPosition(position, false) }
 
-            buildSnapshotFromResult(
+            withSessionNotice(buildSnapshotFromResult(
                 result, session, sessionService, sourceService, variableService, stackFrameService,
                 params.includeSource, params.includeVars, params.includeStack, params.includeGlobals,
                 params.expandStack
-            )
+            ))
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }

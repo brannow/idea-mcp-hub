@@ -11,6 +11,7 @@ import com.intellij.xdebugger.XDebugSession
 import com.intellij.xdebugger.XDebuggerManager
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolAnnotations
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.serialization.json.*
@@ -18,14 +19,17 @@ import kotlinx.serialization.json.*
 /**
  * Tracks which session the agent is working with.
  * Detects when the active session changes externally (e.g., user clicks a different debug tab)
- * and blocks the next tool call with an alert instead of silently operating on the wrong session.
+ * and informs the agent via a notice prepended to the next tool response.
  *
- * Updated by: resolvePausedSession (on success), session_activate (explicit switch)
- * Cleared by: session_stop, session ended
+ * Updated by: resolvePausedSession (on success), session_stop (auto-track remaining)
+ * Cleared by: session_stop (all), session ended
  */
 internal object AgentSessionTracker {
     @Volatile
     var lastSessionId: String? = null
+
+    @Volatile
+    var pendingNotice: String? = null
 
     fun track(session: XDebugSession) {
         lastSessionId = System.identityHashCode(session).toString()
@@ -37,16 +41,19 @@ internal object AgentSessionTracker {
 
     fun clear() {
         lastSessionId = null
+        pendingNotice = null
+    }
+
+    fun consumeNotice(): String? {
+        val n = pendingNotice
+        pendingNotice = null
+        return n
     }
 
     /**
      * Check if the active session changed unexpectedly.
-     * Returns null if everything is fine, or an error message if the session switched.
-     *
-     * @param currentSessionId the ID of the current active session
-     * @param currentSessionName the name of the current active session
-     * @param previousSessionStatus a lambda that resolves the status of the previous session:
-     *        "terminated", "paused, inactive", or "running, inactive"
+     * If switched, auto-tracks the new session and sets [pendingNotice].
+     * Returns the notice text, or null if no switch occurred.
      */
     fun checkSessionSwitch(
         currentSessionId: String,
@@ -56,12 +63,32 @@ internal object AgentSessionTracker {
         val lastId = lastSessionId ?: return null
         if (lastId == currentSessionId) return null
 
+        // Auto-track the new session
+        lastSessionId = currentSessionId
+
         val status = previousSessionStatus(lastId)
-        return "Active session changed unexpectedly.\n" +
-            "Previous: #$lastId ($status).\n" +
-            "Active: #$currentSessionId \"$currentSessionName\".\n\n" +
-            "Use session_activate to confirm the switch, or session_list to see all sessions."
+        val notice = "Note: Active session changed from #$lastId ($status) to #$currentSessionId \"$currentSessionName\".\n" +
+            "Ask the user to switch debug tabs in PhpStorm if you need session #$lastId."
+        pendingNotice = notice
+        return notice
     }
+}
+
+/**
+ * Wraps a successful [CallToolResult] with a session switch notice if one is pending.
+ * Consumes the notice so it only appears once.
+ */
+internal fun withSessionNotice(result: CallToolResult): CallToolResult {
+    val notice = AgentSessionTracker.consumeNotice() ?: return result
+    if (result.isError == true) return result
+    val first = result.content.firstOrNull()
+    if (first is TextContent) {
+        return CallToolResult(
+            content = listOf(TextContent("$notice\n\n${first.text}")) + result.content.drop(1),
+            isError = result.isError
+        )
+    }
+    return result
 }
 
 /**
@@ -79,7 +106,7 @@ internal fun resolveActiveSession(project: Project): Pair<XDebugSession?, CallTo
         if (alive.isEmpty()) {
             return null to err("No debug session")
         }
-        return null to err("Session ended. Other sessions:\n\n${formatSessionList(alive)}\n\nUse session_activate to switch.")
+        return null to err("Session ended. Other sessions:\n\n${formatSessionList(alive)}\n\nThe IDE will auto-focus a remaining session. Call your tool again.")
     }
 
     // Check for unexpected session switch
@@ -93,15 +120,16 @@ internal fun resolveActiveSession(project: Project): Pair<XDebugSession?, CallTo
         val previousAlive = previousSession != null && !previousSession.isStopped
 
         if (previousAlive) {
-            // Previous session is still alive — genuine conflict, block
-            val status = if (previousSession!!.isSuspended) "paused, inactive" else "running, inactive"
-            val switchError = AgentSessionTracker.checkSessionSwitch(
+            // Previous session is still alive — inform the agent but don't block
+            val status = if (previousSession!!.isSuspended) "paused" else "running"
+            AgentSessionTracker.checkSessionSwitch(
                 currentSessionId = currentId,
                 currentSessionName = session.sessionName
             ) { status }
-            if (switchError != null) return null to err(switchError)
+            // Notice is stored on AgentSessionTracker.pendingNotice,
+            // consumed by withSessionNotice() in the tool handler
         }
-        // Previous terminated or not found — auto-track new session
+        // Previous terminated or not found — auto-track silently
     }
 
     AgentSessionTracker.track(session)
@@ -110,10 +138,10 @@ internal fun resolveActiveSession(project: Project): Pair<XDebugSession?, CallTo
 
 /**
  * Resolve the active paused debug session, or return an error result.
- * Always uses the current (active) session. Use session_activate to switch sessions.
+ * Always uses the current (active) session — the one focused in the IDE's debug panel.
  *
- * If the active session changed externally (user switched tabs), blocks with an alert
- * and requires the agent to call session_activate or session_list to re-orient.
+ * If the active session changed externally (user switched tabs), a notice is stored
+ * on [AgentSessionTracker.pendingNotice] and consumed by [withSessionNotice].
  */
 internal fun resolvePausedSession(project: Project): Pair<XDebugSession?, CallToolResult?> {
     val (session, error) = resolveActiveSession(project)
@@ -229,18 +257,18 @@ fun Server.registerDebugTools(project: Project) {
             if (path == null) {
                 // No path → expand all top-level variables
                 val nodes = variableService.getAllVariableDetails(frame, depth)
-                ok(formatVariableDetailList(filterGlobalNodes(nodes, includeGlobals)))
+                withSessionNotice(ok(formatVariableDetailList(filterGlobalNodes(nodes, includeGlobals))))
             } else {
                 // Split comma-separated paths
                 val paths = path.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                 if (paths.size == 1) {
                     val node = variableService.getVariableDetail(frame, paths.first(), depth)
-                    ok(formatVariableDetail(node, paths.first()))
+                    withSessionNotice(ok(formatVariableDetail(node, paths.first())))
                 } else {
                     val nodes = paths.map { p ->
                         p to variableService.getVariableDetail(frame, p, depth)
                     }
-                    ok(nodes.joinToString("\n\n") { (p, node) -> formatVariableDetail(node, p) })
+                    withSessionNotice(ok(nodes.joinToString("\n\n") { (p, node) -> formatVariableDetail(node, p) }))
                 }
             }
         } catch (e: VariablePathException) {
@@ -337,7 +365,7 @@ fun Server.registerDebugTools(project: Project) {
             } else null
             val frames = if (includeStack) extractStackFrames(session, stackFrameService) else null
 
-            ok(formatSnapshot(sessionInfo, source, variables, frames, activeDepth = frameIndex, collapseLibrary = !expandStack))
+            withSessionNotice(ok(formatSnapshot(sessionInfo, source, variables, frames, activeDepth = frameIndex, collapseLibrary = !expandStack)))
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }
@@ -396,7 +424,7 @@ fun Server.registerDebugTools(project: Project) {
                 return@addTool err(msg)
             }
 
-            ok(formatEvaluationResult(expression, node))
+            withSessionNotice(ok(formatEvaluationResult(expression, node)))
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }
@@ -462,7 +490,7 @@ fun Server.registerDebugTools(project: Project) {
             } else null
             val frames = if (includeStack) extractStackFrames(session!!, stackFrameService) else null
 
-            ok(formatSnapshot(sessionInfo, source, variables, frames, collapseLibrary = !expandStack))
+            withSessionNotice(ok(formatSnapshot(sessionInfo, source, variables, frames, collapseLibrary = !expandStack)))
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }
@@ -499,7 +527,7 @@ fun Server.registerDebugTools(project: Project) {
             }
 
             val text = consoleImpl.editor?.document?.text ?: ""
-            if (text.isBlank()) return@addTool ok("(empty)")
+            if (text.isBlank()) return@addTool withSessionNotice(ok("(empty)"))
 
             val output = if (tail > 0) {
                 val lines = text.lines()
@@ -508,7 +536,7 @@ fun Server.registerDebugTools(project: Project) {
                 text
             }
 
-            ok(output)
+            withSessionNotice(ok(output))
         } catch (e: Exception) {
             err(e.message ?: "Unknown error")
         }

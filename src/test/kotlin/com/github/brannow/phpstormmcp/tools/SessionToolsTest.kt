@@ -41,14 +41,6 @@ class SessionToolsTest {
         val isError: Boolean = false,
     )
 
-    data class ActivateCase(
-        val name: String,
-        val sessions: List<SessionState>,
-        val sessionId: String,
-        val expectedOutput: String,
-        val isError: Boolean = false,
-    )
-
     private fun buildService(sessions: List<SessionState>): SessionService {
         val mockSessions = mutableMapOf<SessionState, XDebugSession>()
         var activeSessionRef: XDebugSession? = null
@@ -92,8 +84,8 @@ class SessionToolsTest {
             override fun <T> readAction(action: () -> T): T = action()
             override fun runOnEdt(action: () -> Unit) {
                 action()
-                // After stop/activate: auto-switch to the first alive session
-                // (simulates what PhpStorm does when we call activateSession)
+                // After stop: simulate IDE auto-focus behavior
+                // (PhpStorm auto-focuses the next alive session when one is stopped)
                 val firstAlive = mockSessions.entries.firstOrNull { !it.value.isStopped }
                 activeSessionRef = firstAlive?.value
             }
@@ -140,32 +132,6 @@ class SessionToolsTest {
             val result = handleSessionStop(service, case.all)
             assertEquals(case.expectedOutput, resultText(result))
             assertEquals(case.isError, result.isError ?: false)
-        } catch (e: Exception) {
-            assertEquals(case.expectedOutput, e.message ?: "Unknown error")
-            assertEquals(true, case.isError)
-        }
-    }
-
-    // ========================================================================
-    // session_activate
-    // ========================================================================
-
-    @ParameterizedTest(name = "{0}")
-    @MethodSource("sessionActivateCases")
-    fun session_activate(case: ActivateCase) {
-        val service = buildService(case.sessions)
-        try {
-            val result = handleSessionActivate(service, case.sessionId)
-            assertEquals(case.expectedOutput, resultText(result))
-            assertEquals(case.isError, result.isError ?: false)
-        } catch (e: SessionNotFoundException) {
-            val output = if (e.activeSessions.isEmpty()) {
-                "Session '${e.requestedId}' not found, no sessions in project"
-            } else {
-                "Session '${e.requestedId}' not found, current sessions:\n\n${formatSessionList(e.activeSessions)}"
-            }
-            assertEquals(case.expectedOutput, output)
-            assertEquals(true, case.isError)
         } catch (e: Exception) {
             assertEquals(case.expectedOutput, e.message ?: "Unknown error")
             assertEquals(true, case.isError)
@@ -273,44 +239,6 @@ class SessionToolsTest {
                 ),
                 all = true,
                 expectedOutput = "#111 \"index.php\" [stopped] at src/index.php:5\n#222 \"test.php\" [stopped] at src/test.php:10",
-            ),
-        )
-
-        // -- session_activate cases --
-
-        @JvmStatic
-        fun sessionActivateCases() = listOf(
-            ActivateCase(
-                name = "activate single session",
-                sessions = listOf(
-                    SessionState("111", "index.php", suspended = true, file = "src/index.php", line = 5, active = true)
-                ),
-                sessionId = "111",
-                expectedOutput = "#111 \"index.php\" at src/index.php:5 (active)",
-            ),
-            ActivateCase(
-                name = "activate with hash prefix",
-                sessions = listOf(
-                    SessionState("111", "index.php", suspended = true, file = "src/index.php", line = 5, active = true)
-                ),
-                sessionId = "#111",
-                expectedOutput = "#111 \"index.php\" at src/index.php:5 (active)",
-            ),
-            ActivateCase(
-                name = "not found",
-                sessions = listOf(
-                    SessionState("111", "index.php", suspended = true, file = "src/index.php", line = 5, active = true)
-                ),
-                sessionId = "999",
-                expectedOutput = "Session '999' not found, current sessions:\n\n#111 \"index.php\" at src/index.php:5 (active)",
-                isError = true,
-            ),
-            ActivateCase(
-                name = "not found, no sessions",
-                sessions = emptyList(),
-                sessionId = "999",
-                expectedOutput = "Session '999' not found, no sessions in project",
-                isError = true,
             ),
         )
     }
